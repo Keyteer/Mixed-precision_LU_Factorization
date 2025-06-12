@@ -7,11 +7,8 @@
 
 using namespace std;
 
-void Extract(double *data, int *ipiv, int n, int m, int *L, int *U) {
-    
-}
-
-void print_matrix(const char *msg, double *mat, int n, int m) {
+// Helper function to print a matrix
+void print_matrix(const char* msg, double* mat, int n, int m) {
     cout << msg << endl;
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < m; j++) {
@@ -109,10 +106,10 @@ int main(int argc, char **argv) {
         }
 
         // Benchmark MPF (your LU factorization)
-        auto start = std::chrono::high_resolution_clock::now();
+        auto start = chrono::high_resolution_clock::now();
         MPF(n, data);
-        auto end = std::chrono::high_resolution_clock::now();
-        double mpf_time = std::chrono::duration<double>(end - start).count();
+        auto end = chrono::high_resolution_clock::now();
+        double mpf_time = chrono::duration<double>(end - start).count();
 
         if (verbose && n < 10) {
             print_matrix("After MPF (LU):", data, n, m);
@@ -120,10 +117,10 @@ int main(int argc, char **argv) {
 
         // Benchmark LAPACKE_dgetrf
         int *ipiv = new int[n];
-        start = std::chrono::high_resolution_clock::now();
+        start = chrono::high_resolution_clock::now();
         int info = LAPACKE_dgetrf(LAPACK_COL_MAJOR, n, m, data_copy, n, ipiv);
-        end = std::chrono::high_resolution_clock::now();
-        double lapack_time = std::chrono::duration<double>(end - start).count();
+        end = chrono::high_resolution_clock::now();
+        double lapack_time = chrono::duration<double>(end - start).count();
 
 
         if (info != 0) {
