@@ -8,7 +8,7 @@
 using namespace std;
 
 // Helper function to print a matrix
-void print_matrix(const char* msg, double* mat, int n, int m) {
+void print_matrix(const char *msg, double *mat, int n, int m) {
     cout << msg << endl;
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < m; j++) {
@@ -19,7 +19,7 @@ void print_matrix(const char* msg, double* mat, int n, int m) {
     cout << endl;
 }
 
-void print_LU(const double* lu, int n) {
+void print_LU(const double *lu, int n) {
     // Print L
     cout << "L matrix:" << endl;
     for (int i = 0; i < n; ++i) {
@@ -47,6 +47,54 @@ void print_LU(const double* lu, int n) {
         cout << endl;
     }
     cout << endl;
+}
+
+void get_LU(const double *A, double *L, double *U, int n) {
+    // Extract L and U from the LU factorization
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < n; ++j) {
+            if (i > j) {
+                L[i * n + j] = A[i * n + j];
+                U[i * n + j] = 0.0;
+            } else if (i == j) {
+                L[i * n + j] = 1.0;
+                U[i * n + j] = A[i * n + j];
+            } else {
+                L[i * n + j] = 0.0;
+                U[i * n + j] = A[i * n + j];
+            }
+        }
+    }
+}
+
+void swap(double &a, double &b) {
+    double temp = a;
+    a = b;
+    b = temp;
+}
+
+void multiply_matrices(const double *A, const double *B, double *C, int n, int m, int p) {
+    // C = A * B
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < p; ++j) {
+            C[i * p + j] = 0.0;
+            for (int k = 0; k < m; ++k) {
+                C[i * p + j] += A[i * m + k] * B[k * p + j];
+            }
+        }
+    }
+}
+
+void row_permute(double *A, int *ipiv, int n) {
+    // Apply row permutations based on ipiv
+    for (int i = 0; i < n; ++i) {
+        if (ipiv[i] - 1 != i) { // LAPACK uses 1-based indexing
+            int j = ipiv[i] - 1; // Convert to 0-based indexing
+            for (int k = 0; k < n; ++k) {
+                swap(A[i * n + k], A[j * n + k]);
+            }
+        }
+    }
 }
 
 int main(int argc, char **argv) {
@@ -118,7 +166,7 @@ int main(int argc, char **argv) {
         // Benchmark LAPACKE_dgetrf
         int *ipiv = new int[n];
         start = chrono::high_resolution_clock::now();
-        int info = LAPACKE_dgetrf(LAPACK_COL_MAJOR, n, m, data_copy, n, ipiv);
+        int info = LAPACKE_dgetrf(LAPACK_ROW_MAJOR, n, m, data_copy, n, ipiv);
         end = chrono::high_resolution_clock::now();
         double lapack_time = chrono::duration<double>(end - start).count();
 
@@ -138,7 +186,39 @@ int main(int argc, char **argv) {
         }
 
         cout << "MPF() time: " << mpf_time << " seconds" << endl;
-        cout << "LAPACKE_dgetrf time: " << lapack_time << " seconds" << endl;
+        cout << "LAPACKE_dgetrf time: " << lapack_time << " seconds\n" << endl;
+
+
+        // Verify results
+        // get lu
+        double *L = new double[n * m];
+        double *U = new double[n * m];
+        get_LU(data_copy, L, U, n);
+        double *LU = new double[n * m];
+        multiply_matrices(L, U, LU, n, n, m);
+
+        print_matrix("LU: ", LU, n, m);
+
+        double *PLU = new double[n * m];
+        memcpy(PLU, LU, n * m * sizeof(double));
+        row_permute(PLU, ipiv, n);
+
+        print_matrix("PLU matrix:", PLU, n, m);
+
+
+
+        cout << "\n\n MPF: \n\n";
+
+        
+        // get lu
+        L = new double[n * m];
+        U = new double[n * m];
+        get_LU(data, L, U, n);
+        LU = new double[n * m];
+        multiply_matrices(L, U, LU, n, n, m);
+
+        print_matrix("LU: ", LU, n, m);
+
 
         delete[] data;
         delete[] data_copy;
