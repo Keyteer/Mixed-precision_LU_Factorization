@@ -67,12 +67,6 @@ void get_LU(const double *A, double *L, double *U, int n) {
     }
 }
 
-void swap(double &a, double &b) {
-    double temp = a;
-    a = b;
-    b = temp;
-}
-
 void multiply_matrices(const double *A, const double *B, double *C, int n, int m, int p) {
     // C = A * B
     for (int i = 0; i < n; ++i) {
@@ -85,13 +79,14 @@ void multiply_matrices(const double *A, const double *B, double *C, int n, int m
     }
 }
 
-void row_permute(double *A, int *ipiv, int n) {
-    // Apply row permutations based on ipiv
-    for (int i = 0; i < n; ++i) {
-        if (ipiv[i] - 1 != i) { // LAPACK uses 1-based indexing
-            int j = ipiv[i] - 1; // Convert to 0-based indexing
-            for (int k = 0; k < n; ++k) {
-                swap(A[i * n + k], A[j * n + k]);
+void row_permute(double *A, const int *ipiv, int n) {
+    // Apply the pivot swaps
+    for (int i = n - 1; i >= 0; --i) {
+        int piv = ipiv[i] - 1; // Convert to 0-based
+        if (piv != i) {
+            // Swap rows i and piv
+            for (int j = 0; j < n; ++j) {
+                std::swap(A[i * n + j], A[piv * n + j]);
             }
         }
     }
@@ -138,7 +133,7 @@ int main(int argc, char **argv) {
         for (int i = 0; i < n * m; i++) {
             fin >> data[i];
         }
-        if (fin.fail() || fin.eof()) {
+        if (fin.fail()) {
             cout << "Error while reading matrix data in " << argv[1] << endl;
             delete[] data;
             return -1;
@@ -209,7 +204,7 @@ int main(int argc, char **argv) {
 
         cout << "\n\n MPF: \n\n";
 
-        
+
         // get lu
         L = new double[n * m];
         U = new double[n * m];
