@@ -127,7 +127,7 @@ bool check_correctitude(double *A, double *Data, int ipiv[], int n, bool verbose
 
     print_sqrMatrix("PLU matrix:", PLU, n, verbose);
 
-    
+
 
     delete[] L;
     delete[] U;
@@ -152,6 +152,10 @@ int main(int argc, char **argv) {
         cout << "Failed to open " << argv[1] << endl;
         return -1;
     }
+
+    std::ofstream csv("benchmark_times.csv", std::ios::app);
+    csv << "matrix_size,mpf_time,lapack_time\n";
+
 
     int num_matrices;
     fin >> num_matrices;
@@ -229,7 +233,10 @@ int main(int argc, char **argv) {
         delete[] data_mpf;
         delete[] data_dgetrf;
         delete[] ipiv;
+
+        csv << n << "," << mpf_time << "," << lapack_time << "\n";
     }
+    csv.close();
 
     return 0;
 }
