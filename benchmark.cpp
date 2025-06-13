@@ -96,19 +96,18 @@ void row_permute(double *A, const int *ipiv, int n) {
     }
 }
 
-bool check_sqrMatrix_equality(double *A, double *B, int n) {
+bool check_sqrMatrix_equality(double *A, double *B, int n, double tol = 1e-10) {
     bool eql = true;
     for (int i = 0; i < n * n; i++) {
-        if (A[i] != B[i]) {
+        if (fabs(A[i] - B[i]) > tol) {
             eql = false;
+            break;
         }
     }
-
     return eql;
 }
 
 bool check_correctitude(double *A, double *Data, int ipiv[], int n, bool verbose = false) {
-    bool crrt = true;
 
     // Verify results
         // get lu
@@ -128,13 +127,14 @@ bool check_correctitude(double *A, double *Data, int ipiv[], int n, bool verbose
 
     print_sqrMatrix("PLU matrix:", PLU, n, verbose);
 
+    
 
     delete[] L;
     delete[] U;
     delete[] LU;
     delete[] PLU;
 
-    return crrt;
+    return check_sqrMatrix_equality(Data, PLU, n);
 }
 
 int main(int argc, char **argv) {
@@ -200,10 +200,6 @@ int main(int argc, char **argv) {
         auto end = chrono::high_resolution_clock::now();
         double mpf_time = chrono::duration<double>(end - start).count();
 
-        if (verbose && n < 10) {
-            print_sqrMatrix("After MPF (LU):", data_mpf, n);
-        }
-
         // Benchmark LAPACKE_dgetrf
         int *ipiv = new int[n];
         start = chrono::high_resolution_clock::now();
@@ -214,24 +210,18 @@ int main(int argc, char **argv) {
 
         if (info != 0) {
             cout << "LAPACKE_dgetrf failed with error code " << info << endl;
-        } else if (verbose && n < 10) {
-            print_sqrMatrix("After LAPACKE_dgetrf (LU):", data_dgetrf, n);
-            print_LU(data_dgetrf, n);
-
-            // Print pivoting
-            cout << "Pivoting (ipiv): ";
-            for (int i = 0; i < n; ++i) {
-                cout << ipiv[i] << " ";
-            }
-            cout << "\n" << endl;
         }
 
-        cout << "MPF() time: " << mpf_time << " seconds" << endl;
+        cout << "MPF() time: " << mpf_time << " seconds\n" << endl;
         cout << "LAPACKE_dgetrf time: " << lapack_time << " seconds\n" << endl;
 
+        cout << "- dgetrf -" << endl;
+        bool crtt_dgetrf = check_correctitude(data_original, data_dgetrf, ipiv, n, verbose);
+        cout << "corectitud dgetrf: " << crtt_dgetrf << endl;
 
-        cout << "corectitud dgetrf: " << check_correctitude(data_original, data_dgetrf, ipiv, n, verbose) << endl;
-        cout << "corectitud mpf: " << check_correctitude(data_original, data_mpf, ipiv, n, verbose) << endl;
+        cout << "- MPF -" << endl;
+        bool crtt_mpf = check_correctitude(data_original, data_mpf, ipiv, n, verbose);
+        cout << "corectitud mpf: " << crtt_mpf << endl;
 
         cout << "--------" << endl;
 
