@@ -8,7 +8,7 @@
 using namespace std;
 
 // Helper function to print a matrix
-void print_sqr_matrix(const char *msg, double *mat, int n, bool verbose = true) {
+void print_sqrMatrix(const char *msg, double *mat, int n, bool verbose = true) {
     if (verbose && n < 10) {
         cout << msg << endl;
         for (int i = 0; i < n; i++) {
@@ -71,7 +71,7 @@ void get_LU(const double *A, double *L, double *U, int n) {
     }
 }
 
-void multiply_sqr_matrices(const double *A, const double *B, double *C, int n) {
+void multiply_sqrMatrices(const double *A, const double *B, double *C, int n) {
     // C = A * B
     for (int i = 0; i < n; ++i) {
         for (int j = 0; j < n; ++j) {
@@ -94,6 +94,47 @@ void row_permute(double *A, const int *ipiv, int n) {
             }
         }
     }
+}
+
+bool check_sqrMatrix_equality(double *A, double *B, int n) {
+    bool eql = true;
+    for (int i = 0; i < n * n; i++) {
+        if (A[i] != B[i]) {
+            eql = false;
+        }
+    }
+
+    return eql;
+}
+
+bool check_correctitude(double *A, double *Data, int ipiv[], int n, bool verbose = false) {
+    bool crrt = true;
+
+    // Verify results
+        // get lu
+    double *L = new double[n * n];
+    double *U = new double[n * n];
+    get_LU(A, L, U, n);
+
+    print_LU(A, n, verbose);
+
+    // get L*U
+    double *LU = new double[n * n];
+    multiply_sqrMatrices(L, U, LU, n);
+
+    double *PLU = new double[n * n];
+    memcpy(PLU, LU, n * n * sizeof(double));
+    row_permute(PLU, ipiv, n);
+
+    print_sqrMatrix("PLU matrix:", PLU, n, verbose);
+
+
+    delete[] L;
+    delete[] U;
+    delete[] LU;
+    delete[] PLU;
+
+    return crrt;
 }
 
 int main(int argc, char **argv) {
@@ -125,45 +166,48 @@ int main(int argc, char **argv) {
     for (int mNum = 0; mNum < num_matrices; mNum++) {
 
         int n;
-        double *data;
+        double *data_original;
 
         fin >> n;
         if (fin.fail() || n <= 0 || n <= 0) {
             cout << "Invalid matrix size in " << argv[1] << " n: " << n << " n: " << n << endl;
             return -1;
         }
-        data = new double[n * n];
+        data_original = new double[n * n];
         for (int i = 0; i < n * n; i++) {
-            fin >> data[i];
+            fin >> data_original[i];
         }
         if (fin.fail()) {
             cout << "Error while reading matrix data in " << argv[1] << endl;
-            delete[] data;
+            delete[] data_original;
             return -1;
         }
 
-        // Make a copy of the data for fair benchmarking
-        double *data_copy = new double[n * n];
-        memcpy(data_copy, data, n * n * sizeof(double));
+        // Make copys of A for fair benchmarking
+        double *data_dgetrf = new double[n * n];
+        double *data_mpf = new double[n * n];
+        memcpy(data_dgetrf, data_original, n * n * sizeof(double));
+        memcpy(data_mpf, data_original, n * n * sizeof(double));
+
 
         if (verbose && n < 10) {
-            print_sqr_matrix("Original matrix:", data, n);
+            print_sqrMatrix("Original matrix:", data_mpf, n);
         }
 
         // Benchmark MPF (your LU factorization)
         auto start = chrono::high_resolution_clock::now();
-        MPF(n, data);
+        MPF(n, data_mpf);
         auto end = chrono::high_resolution_clock::now();
         double mpf_time = chrono::duration<double>(end - start).count();
 
         if (verbose && n < 10) {
-            print_sqr_matrix("After MPF (LU):", data, n);
+            print_sqrMatrix("After MPF (LU):", data_mpf, n);
         }
 
         // Benchmark LAPACKE_dgetrf
         int *ipiv = new int[n];
         start = chrono::high_resolution_clock::now();
-        int info = LAPACKE_dgetrf(LAPACK_ROW_MAJOR, n, n, data_copy, n, ipiv);
+        int info = LAPACKE_dgetrf(LAPACK_ROW_MAJOR, n, n, data_dgetrf, n, ipiv);
         end = chrono::high_resolution_clock::now();
         double lapack_time = chrono::duration<double>(end - start).count();
 
@@ -171,8 +215,8 @@ int main(int argc, char **argv) {
         if (info != 0) {
             cout << "LAPACKE_dgetrf failed with error code " << info << endl;
         } else if (verbose && n < 10) {
-            print_sqr_matrix("After LAPACKE_dgetrf (LU):", data_copy, n);
-            print_LU(data_copy, n);
+            print_sqrMatrix("After LAPACKE_dgetrf (LU):", data_dgetrf, n);
+            print_LU(data_dgetrf, n);
 
             // Print pivoting
             cout << "Pivoting (ipiv): ";
@@ -186,36 +230,14 @@ int main(int argc, char **argv) {
         cout << "LAPACKE_dgetrf time: " << lapack_time << " seconds\n" << endl;
 
 
-        // Verify results
-        // get lu
-        double *L = new double[n * n];
-        double *U = new double[n * n];
-        get_LU(data_copy, L, U, n);
-        double *LU = new double[n * n];
-        multiply_sqr_matrices(L, U, LU, n);
+        cout << "corectitud dgetrf: " << check_correctitude(data_original, data_dgetrf, ipiv, n, verbose) << endl;
+        cout << "corectitud mpf: " << check_correctitude(data_original, data_mpf, ipiv, n, verbose) << endl;
 
-        print_sqr_matrix("LU: ", LU, n, verbose);
+        cout << "--------" << endl;
 
-        double *PLU = new double[n * n];
-        memcpy(PLU, LU, n * n * sizeof(double));
-        row_permute(PLU, ipiv, n);
-
-        print_sqr_matrix("PLU matrix:", PLU, n, verbose);
-
-        cout << "\n\n MPF: \n\n";
-
-
-        // get lu
-        L = new double[n * n];
-        U = new double[n * n];
-        get_LU(data, L, U, n);
-        LU = new double[n * n];
-        multiply_sqr_matrices(L, U, LU, n);
-
-        print_sqr_matrix("LU: ", LU, n);
-
-        delete[] data;
-        delete[] data_copy;
+        delete[] data_original;
+        delete[] data_mpf;
+        delete[] data_dgetrf;
         delete[] ipiv;
     }
 
