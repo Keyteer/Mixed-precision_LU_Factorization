@@ -1,4 +1,5 @@
 #include <iostream>
+#include <iomanip>
 #include <fstream>
 #include <lapacke.h>
 #include "MPF.h"
@@ -110,12 +111,20 @@ bool check_sqrMatrix_equality(double *A, double *B, int n, double tol = 1e-10) {
 bool check_correctitude(double *A, double *Data, int ipiv[], int n, bool verbose = false) {
 
     // Verify results
-        // get lu
+    // get lu
     double *L = new double[n * n];
     double *U = new double[n * n];
     get_LU(A, L, U, n);
 
     print_LU(A, n, verbose);
+
+    if (verbose && n < 10) {
+        cout << "ipiv:";
+        for (int i = 0; i < n; i++) {
+            cout << " " << ipiv[i];
+        }
+        cout << "\n" << endl;
+    }
 
     // get L*U
     double *LU = new double[n * n];
@@ -153,8 +162,8 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    std::ofstream csv("benchmark_times.csv", std::ios::app);
-    csv << "matrix_size,mpf_time,lapack_time\n";
+    ofstream csv("benchmark_times.csv", ios::app);
+    csv << "matrix_size,mpf_time,lapack_time\n" << fixed << setprecision(10);
 
 
     int num_matrices;
@@ -234,7 +243,7 @@ int main(int argc, char **argv) {
         delete[] data_dgetrf;
         delete[] ipiv;
 
-        csv << n << "," << mpf_time << "," << lapack_time << "\n";
+        csv << n << "," << mpf_time << "," << lapack_time << endl;
     }
     csv.close();
 

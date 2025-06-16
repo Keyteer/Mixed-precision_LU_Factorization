@@ -1,0 +1,13 @@
+matrix_size,mpf_time,lapack_time
+2,6.71e-07,0.000121741
+4,9.32e-07,3.807e-06
+8,2.876e-06,1.8275e-05
+16,2.4236e-05,1.0771e-05
+32,7.1757e-05,4.2181e-05
+64,0.000341811,0.000166457
+matrix_size,mpf_time,lapack_time
+5,4.719e-06,0.012268234
+matrix_size,mpf_time,lapack_time
+5,0.0000091080,0.0005688630
+matrix_size,mpf_time,lapack_time
+5,0.0000037070,0.0003398170
