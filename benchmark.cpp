@@ -5,7 +5,6 @@
 #include "MPF.h"
 #include <chrono>
 #include <cstring>
-#include <cblas.h>
 
 using namespace std;
 
@@ -74,10 +73,15 @@ void get_LU(const double *A, double *L, double *U, int n) {
 }
 
 void multiply_sqrMatrices(const double *A, const double *B, double *C, int n) {
-    // C = A * B using BLAS
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-        n, n, n,
-        1.0, A, n, B, n, 0.0, C, n);
+    // C = A * B
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < n; ++j) {
+            C[i * n + j] = 0.0;
+            for (int k = 0; k < n; ++k) {
+                C[i * n + j] += A[i * n + k] * B[k * n + j];
+            }
+        }
+    }
 }
 
 void row_permute(double *A, const int *ipiv, int n) {
@@ -93,37 +97,26 @@ void row_permute(double *A, const int *ipiv, int n) {
     }
 }
 
-// Construct permutation matrix P from ipiv
-void permutation_matrix_from_ipiv(double *P, const int *ipiv, int n) {
-    // Start with identity
-    for (int i = 0; i < n * n; ++i) P[i] = 0.0;
-    for (int i = 0; i < n; ++i) P[i * n + i] = 1.0;
-    // Apply swaps
-    for (int i = 0; i < n; ++i) {
-        int piv = ipiv[i] - 1;
-        if (piv != i) {
-            for (int j = 0; j < n; ++j) {
-                std::swap(P[i * n + j], P[piv * n + j]);
-            }
-        }
-    }
-}
-
-bool check_sqrMatrix_equality(double *A, double *B, int n, double tol = 1e-3) {
+bool check_sqrMatrix_equality(double *A, double *B, int n, double tol = 1e-10) {
+    bool eql = true;
     for (int i = 0; i < n * n; i++) {
         if (fabs(A[i] - B[i]) > tol) {
-            return false;
+            eql = false;
+            break;
         }
     }
-    return true;
+    return eql;
 }
 
 bool check_correctitude(double *A, double *Data, int ipiv[], int n, bool verbose = false) {
+
+    // Verify results
+    // get lu
     double *L = new double[n * n];
     double *U = new double[n * n];
-    get_LU(Data, L, U, n);
+    get_LU(A, L, U, n);
 
-    print_LU(Data, n, verbose);
+    print_LU(A, n, verbose);
 
     if (verbose && n < 10) {
         cout << "ipiv:";
@@ -137,22 +130,20 @@ bool check_correctitude(double *A, double *Data, int ipiv[], int n, bool verbose
     double *LU = new double[n * n];
     multiply_sqrMatrices(L, U, LU, n);
 
-    print_sqrMatrix("LU matrix:", LU, n, verbose);
-
     double *PLU = new double[n * n];
     memcpy(PLU, LU, n * n * sizeof(double));
     row_permute(PLU, ipiv, n);
 
     print_sqrMatrix("PLU matrix:", PLU, n, verbose);
 
-    bool correctitude = check_sqrMatrix_equality(A, PLU, n);
+
 
     delete[] L;
     delete[] U;
     delete[] LU;
     delete[] PLU;
 
-    return correctitude;
+    return check_sqrMatrix_equality(Data, PLU, n);
 }
 
 int main(int argc, char **argv) {
@@ -229,21 +220,23 @@ int main(int argc, char **argv) {
         end = chrono::high_resolution_clock::now();
         double lapack_time = chrono::duration<double>(end - start).count();
 
+
         if (info != 0) {
             cout << "LAPACKE_dgetrf failed with error code " << info << endl;
         }
 
-        if (verbose) {
-            cout << "MPF() time: " << mpf_time << " seconds\n" << endl;
-            cout << "LAPACKE_dgetrf time: " << lapack_time << " seconds\n" << endl;
-        }
+        cout << "MPF() time: " << mpf_time << " seconds\n" << endl;
+        cout << "LAPACKE_dgetrf time: " << lapack_time << " seconds\n" << endl;
 
-        if (!check_correctitude(data_original, data_dgetrf, ipiv, n, verbose)) {
-            cout << "LAPACKE_dgetrf produced incorrect results." << endl;
-        }
-        if (!check_correctitude(data_original, data_mpf, ipiv, n, verbose)) {
-            cout << "MPF produced incorrect results." << endl;
-        }
+        cout << "- dgetrf -" << endl;
+        bool crtt_dgetrf = check_correctitude(data_original, data_dgetrf, ipiv, n, verbose);
+        cout << "corectitud dgetrf: " << crtt_dgetrf << endl;
+
+        cout << "- MPF -" << endl;
+        bool crtt_mpf = check_correctitude(data_original, data_mpf, ipiv, n, verbose);
+        cout << "corectitud mpf: " << crtt_mpf << endl;
+
+        cout << "--------" << endl;
 
         delete[] data_original;
         delete[] data_mpf;
