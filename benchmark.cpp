@@ -2,9 +2,11 @@
 #include <iomanip>
 #include <fstream>
 #include <lapacke.h>
-#include "MPF.cu"
+#include <vector>
+// #include "MPF.cu"
 #include <chrono>
 #include <cstring>
+#include <cblas.h>
 
 using namespace std;
 
@@ -73,15 +75,10 @@ void get_LU(const double *A, double *L, double *U, int n) {
 }
 
 void multiply_sqrMatrices(const double *A, const double *B, double *C, int n) {
-    // C = A * B
-    for (int i = 0; i < n; ++i) {
-        for (int j = 0; j < n; ++j) {
-            C[i * n + j] = 0.0;
-            for (int k = 0; k < n; ++k) {
-                C[i * n + j] += A[i * n + k] * B[k * n + j];
-            }
-        }
-    }
+    // C = A * B using BLAS
+    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+        n, n, n,
+        1.0, A, n, B, n, 0.0, C, n);
 }
 
 void row_permute(double *A, const int *ipiv, int n) {
@@ -98,14 +95,12 @@ void row_permute(double *A, const int *ipiv, int n) {
 }
 
 bool check_sqrMatrix_equality(double *A, double *B, int n, double tol = 1e-10) {
-    bool eql = true;
     for (int i = 0; i < n * n; i++) {
         if (fabs(A[i] - B[i]) > tol) {
-            eql = false;
-            break;
+            return false;
         }
     }
-    return eql;
+    return true;
 }
 
 bool check_correctitude(double *A, double *Data, int ipiv[], int n, bool verbose = false) {
@@ -114,9 +109,9 @@ bool check_correctitude(double *A, double *Data, int ipiv[], int n, bool verbose
     // get lu
     double *L = new double[n * n];
     double *U = new double[n * n];
-    get_LU(A, L, U, n);
+    get_LU(Data, L, U, n);
 
-    print_LU(A, n, verbose);
+    print_LU(Data, n, verbose);
 
     if (verbose && n < 10) {
         cout << "ipiv:";
@@ -130,31 +125,37 @@ bool check_correctitude(double *A, double *Data, int ipiv[], int n, bool verbose
     double *LU = new double[n * n];
     multiply_sqrMatrices(L, U, LU, n);
 
+    print_sqrMatrix("LU matrix:", LU, n, verbose);
+
     double *PLU = new double[n * n];
     memcpy(PLU, LU, n * n * sizeof(double));
     row_permute(PLU, ipiv, n);
 
     print_sqrMatrix("PLU matrix:", PLU, n, verbose);
 
-
+    bool correctitude = check_sqrMatrix_equality(A, PLU, n);
 
     delete[] L;
     delete[] U;
     delete[] LU;
     delete[] PLU;
 
-    return check_sqrMatrix_equality(Data, PLU, n);
+    return correctitude;
 }
 
 int main(int argc, char **argv) {
 
     if (argc < 2) {
-        cout << "Usage: " << argv[0] << " filename [-v]" << endl;
+        cout << "Usage: " << argv[0] << " filename [-v] [--no-check]" << endl;
         return -1;
     }
 
     bool verbose = false;
-    if (argc > 2 && string(argv[2]) == "-v") verbose = true;
+    bool check_correct = true;
+    for (int i = 2; i < argc; ++i) {
+        if (string(argv[i]) == "-v") verbose = true;
+        if (string(argv[i]) == "--no-check") check_correct = false;
+    }
 
     ifstream fin(argv[1]);
     if (!fin.is_open()) {
@@ -164,7 +165,6 @@ int main(int argc, char **argv) {
 
     ofstream csv("benchmark_times.csv", ios::app);
     csv << "matrix_size,mpf_time,lapack_time\n" << fixed << setprecision(10);
-
 
     int num_matrices;
     fin >> num_matrices;
@@ -182,8 +182,8 @@ int main(int argc, char **argv) {
         double *data_original;
 
         fin >> n;
-        if (fin.fail() || n <= 0 || n <= 0) {
-            cout << "Invalid matrix size in " << argv[1] << " n: " << n << " n: " << n << endl;
+        if (fin.fail() || n <= 0) {
+            cout << "Invalid matrix size in " << argv[1] << " n: " << n << endl;
             return -1;
         }
         data_original = new double[n * n];
@@ -210,7 +210,7 @@ int main(int argc, char **argv) {
         // Benchmark MPF (your LU factorization)
         std::vector<int> ipiv_mpf;
         auto start = chrono::high_resolution_clock::now();
-        MPF(data_mpf, n, 32, ipiv_mpf);
+        // MPF(data_mpf, n, 32, ipiv_mpf);
         auto end = chrono::high_resolution_clock::now();
         double mpf_time = chrono::duration<double>(end - start).count();
 
@@ -226,18 +226,19 @@ int main(int argc, char **argv) {
             cout << "LAPACKE_dgetrf failed with error code " << info << endl;
         }
 
-        cout << "MPF() time: " << mpf_time << " seconds\n" << endl;
-        cout << "LAPACKE_dgetrf time: " << lapack_time << " seconds\n" << endl;
+        if (verbose) {
+            cout << "MPF() time: " << mpf_time << " seconds\n" << endl;
+            cout << "LAPACKE_dgetrf time: " << lapack_time << " seconds\n" << endl;
+        }
 
-        cout << "- dgetrf -" << endl;
-        bool crtt_dgetrf = check_correctitude(data_original, data_dgetrf, ipiv, n, verbose);
-        cout << "corectitud dgetrf: " << crtt_dgetrf << endl;
-
-        cout << "- MPF -" << endl;
-        bool crtt_mpf = check_correctitude(data_original, data_mpf, ipiv, n, verbose);
-        cout << "corectitud mpf: " << crtt_mpf << endl;
-
-        cout << "--------" << endl;
+        if (check_correct) {
+            if (!check_correctitude(data_original, data_dgetrf, ipiv, n, verbose)) {
+                cout << "LAPACKE_dgetrf produced incorrect results." << endl;
+            }
+            if (!check_correctitude(data_original, data_mpf, ipiv, n, verbose)) {
+                cout << "MPF produced incorrect results." << endl;
+            }
+        }
 
         delete[] data_original;
         delete[] data_mpf;
