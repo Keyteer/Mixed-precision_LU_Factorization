@@ -4,9 +4,17 @@
 #include <vector>
 #include <iostream>
 #include <cuda_fp16.h> // Para __half y funciones de conversión FP16
+#include <lapacke.h>
+#include <cublas_v2.h> // Para cublasHandle_t y funciones cuBLAS
 
 // Simulación de FP16 (usa __half como tipo real de CUDA)
 using fp16 = __half;
+
+__device__ inline void swap_fp16(fp16 &a, fp16 &b) {
+    fp16 tmp = a;
+    a = b;
+    b = tmp;
+}
 
 // Conversión robusta de FP64 a FP16 con control de overflow/underflow
 fp16 double_to_fp16(double x) {
@@ -38,32 +46,35 @@ double fp16_to_double(fp16 x) {
 }
 
 // HGETF2: Factorización LU con pivoteo parcial en FP16 (simulada)
-void HGETF2(fp16* panel, int ld, int rows, int cols, int* ipiv_panel) {
+void HGETF2(fp16 *panel, int ld, int rows, int cols, int *ipiv_panel) {
     for (int j = 0; j < cols; ++j) {
+
         // Búsqueda de pivote (máximo valor absoluto en la columna j)
         int piv = j;
-        double maxval = std::abs(fp16_to_double(panel[j * ld + j]));
+        fp16 maxval = __habs(panel[j * ld + j]);
         for (int i = j + 1; i < rows; ++i) {
-            double val = std::abs(fp16_to_double(panel[j * ld + i]));
+            fp16 val = __habs((panel[j * ld + i]));
             if (val > maxval) {
                 maxval = val;
                 piv = i;
             }
         }
         ipiv_panel[j] = piv;
+
         // Intercambio de filas si es necesario
         if (piv != j) {
             for (int k = 0; k < cols; ++k)
-                std::swap(panel[k * ld + j], panel[k * ld + piv]);
+                swap_fp16(panel[k * ld + j], panel[k * ld + piv]);
         }
+
         // Factorización
         for (int i = j + 1; i < rows; ++i) {
-            double lij = fp16_to_double(panel[j * ld + i]) / fp16_to_double(panel[j * ld + j]);
-            panel[j * ld + i] = double_to_fp16(lij);
+            fp16 lij = panel[j * ld + i] / panel[j * ld + j];
+            panel[j * ld + i] = lij;
             for (int k = j + 1; k < cols; ++k) {
-                double a = fp16_to_double(panel[k * ld + i]);
-                double b = fp16_to_double(panel[k * ld + j]);
-                panel[k * ld + i] = double_to_fp16(a - b * lij);
+                fp16 a = panel[k * ld + i];
+                fp16 b = panel[k * ld + j];
+                panel[k * ld + i] = a - b * lij;
             }
         }
     }

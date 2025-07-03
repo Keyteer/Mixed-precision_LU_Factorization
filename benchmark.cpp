@@ -2,7 +2,7 @@
 #include <iomanip>
 #include <fstream>
 #include <lapacke.h>
-#include "MPF.h"
+#include "MPF.cu"
 #include <chrono>
 #include <cstring>
 
@@ -208,8 +208,9 @@ int main(int argc, char **argv) {
         }
 
         // Benchmark MPF (your LU factorization)
+        std::vector<int> ipiv_mpf;
         auto start = chrono::high_resolution_clock::now();
-        MPF(n, data_mpf);
+        MPF(data_mpf, n, 32, ipiv_mpf);
         auto end = chrono::high_resolution_clock::now();
         double mpf_time = chrono::duration<double>(end - start).count();
 
