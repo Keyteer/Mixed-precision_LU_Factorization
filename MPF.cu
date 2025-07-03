@@ -5,7 +5,8 @@
 #include <iostream>
 #include <cuda_fp16.h> // Para __half y funciones de conversión FP16
 #include <lapacke.h>
-#include <cublas_v2.h> // Para cublasHandle_t y funciones cuBLAS
+#include <cublas_v2.h> // Para cuBLAS
+
 
 // Simulación de FP16 (usa __half como tipo real de CUDA)
 using fp16 = __half;
@@ -102,25 +103,26 @@ void DGETF2_NATIVE_NPV(double* panel, int ld, int rows, int cols) {
     }
 }
 
-// DTRSM: Resuelve sistemas triangulares (lado izquierdo, L)
-void DTRSM(double* L, int ldl, double* B, int ldb, int m, int n) {
-    // L: m x m, B: m x n
-    for (int j = 0; j < n; ++j) {
-        for (int i = 0; i < m; ++i) {
-            for (int k = 0; k < i; ++k)
-                B[j * ldb + i] -= L[k * ldl + i] * B[j * ldb + k];
-            B[j * ldb + i] /= L[i * ldl + i];
-        }
-    }
+// --- LASWP: Intercambio de filas en FP64 usando LAPACK ---
+void LASWP(double* A, int n, int k, int cols, const int* ipiv_panel) {
+    // Usar LAPACKE_dlaswp para mayor robustez
+    LAPACKE_dlaswp(LAPACK_COL_MAJOR, n, A, n, k + 1, k + cols, ipiv_panel, 1);
 }
 
-// DGEMM: Multiplicación de matrices (C -= A*B)
-void DGEMM(double* C, int ldc, double* A, int lda, double* B, int ldb, int m, int n, int k) {
-    // C: m x n, A: m x k, B: k x n
-    for (int i = 0; i < m; ++i)
-        for (int j = 0; j < n; ++j)
-            for (int l = 0; l < k; ++l)
-                C[j * ldc + i] -= A[l * lda + i] * B[j * ldb + l];
+// --- DTRSM: Triangular solve en FP64 usando cuBLAS ---
+void DTRSM_cublas(cublasHandle_t handle, double* dA, int lda, double* dB, int ldb, int m, int n) {
+    const double alpha = 1.0;
+    // Lado izquierdo, L, no transpuesta, no unitaria
+    cublasDtrsm(handle, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_N, CUBLAS_DIAG_NON_UNIT,
+                m, n, &alpha, dA, lda, dB, ldb);
+}
+
+// --- DGEMM: Multiplicación de matrices en FP64 usando cuBLAS ---
+void DGEMM_cublas(cublasHandle_t handle, double* dA, int lda, double* dB, int ldb, double* dC, int ldc, int m, int n, int k) {
+    const double alpha = -1.0;
+    const double beta = 1.0;
+    // C = beta*C + alpha*A*B
+    cublasDgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &alpha, dA, lda, dB, ldb, &beta, dC, ldc);
 }
 
 // Algoritmo MPF
