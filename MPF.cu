@@ -4,6 +4,7 @@
 #include <vector>
 #include <iostream>
 #include <cuda_fp16.h> // Para __half y funciones de conversión FP16
+#include <cuda_runtime.h>
 #include <lapacke.h>
 #include <cublas_v2.h> // Para cuBLAS
 
@@ -47,7 +48,7 @@ double fp16_to_double(fp16 x) {
 }
 
 // HGETF2: Factorización LU con pivoteo parcial en FP16 (simulada)
-void HGETF2(fp16 *panel, int ld, int rows, int cols, int *ipiv_panel) {
+/*void HGETF2(fp16 *panel, int ld, int rows, int cols, int *ipiv_panel) {
     for (int j = 0; j < cols; ++j) {
 
         // Búsqueda de pivote (máximo valor absoluto en la columna j)
@@ -79,16 +80,46 @@ void HGETF2(fp16 *panel, int ld, int rows, int cols, int *ipiv_panel) {
             }
         }
     }
-}
+}*/
 
-// LASWP: Aplica permutaciones de filas a la matriz A (FP64)
-void LASWP(double* A, int n, int k, int cols, const int* ipiv_panel) {
+// Kernel de CUDA para HGETF2
+__global__ void HGETF2_kernel(fp16 *panel, int ld, int rows, int cols, int *ipiv_panel) {
+    int tid = threadIdx.x;
     for (int j = 0; j < cols; ++j) {
-        int piv = ipiv_panel[j];
-        if (piv != j) {
-            for (int col = 0; col < n; ++col)
-                std::swap(A[(k + j) * n + col], A[(k + piv) * n + col]);
+        // 1. Búsqueda de pivote (serial, por el thread 0)
+        int piv = j;
+        fp16 maxval = __habs(panel[j * ld + j]);
+        if (tid == 0) {
+            for (int i = j + 1; i < rows; ++i) {
+                fp16 val = __habs(panel[j * ld + i]);
+                if (val > maxval) {
+                    maxval = val;
+                    piv = i;
+                }
+            }
+            ipiv_panel[j] = piv;
         }
+        __syncthreads();
+
+        // 2. Intercambio de filas (serial, por el thread 0)
+        if (tid == 0 && piv != j) {
+            for (int k = 0; k < cols; ++k)
+                swap_fp16(panel[k * ld + j], panel[k * ld + piv]);
+        }
+        __syncthreads();
+
+        // 3. Eliminación (paralelo: cada thread maneja una fila)
+        int i = j + 1 + tid;
+        if (i < rows) {
+            fp16 lij = panel[j * ld + i] / panel[j * ld + j];
+            panel[j * ld + i] = lij;
+            for (int k = j + 1; k < cols; ++k) {
+                fp16 a = panel[k * ld + i];
+                fp16 b = panel[k * ld + j];
+                panel[k * ld + i] = a - b * lij;
+            }
+        }
+        __syncthreads();
     }
 }
 
@@ -133,6 +164,10 @@ void MPF(double* A, int N, int r, std::vector<int>& IPIV) {
     std::vector<int> IPIV_panel(r);
     IPIV.resize(N);
 
+    // --- Create cuBLAS handle ---
+    cublasHandle_t handle;
+    cublasCreate(&handle);
+
     for (int k = 0; k < N; k += r) {
         int current_panel_cols = std::min(r, N - k);
         int panel_rows = N - k;
@@ -143,7 +178,7 @@ void MPF(double* A, int N, int r, std::vector<int>& IPIV) {
                 P_FP16_buffer[j * panel_rows + i] = double_to_fp16(A[(k + j) * N + (k + i)]);
 
         // b.i. Factorización LU con pivoteo parcial en FP16
-        HGETF2(P_FP16_buffer.data(), panel_rows, panel_rows, current_panel_cols, IPIV_panel.data());
+        HGETF2_kernel(P_FP16_buffer.data(), panel_rows, panel_rows, current_panel_cols, IPIV_panel.data());
 
         // b.ii. Aplicar permutaciones a la matriz original FP64
         for (int j = 0; j < current_panel_cols; ++j)
@@ -160,17 +195,36 @@ void MPF(double* A, int N, int r, std::vector<int>& IPIV) {
             for (int i = 0; i < panel_rows; ++i)
                 A[(k + j) * N + (k + i)] = P_FP64_NPV_buffer[j * panel_rows + i];
 
-        // c. Actualización de trailing submatrix
+        // c. Actualización de trailing submatrix usando cuBLAS
         if (k + current_panel_cols < N) {
             int m = panel_rows - current_panel_cols;
             int n = N - k - current_panel_cols;
             // DTRSM: resolver parte inferior del panel
-            DTRSM(&A[k * N + k + current_panel_cols], N, &A[(k + current_panel_cols) * N + k + current_panel_cols], N, m, current_panel_cols);
+            DTRSM_cublas(
+                handle,
+                &A[k * N + k + current_panel_cols], // dA (L)
+                N,
+                &A[(k + current_panel_cols) * N + k + current_panel_cols], // dB (parte inferior del panel)
+                N,
+                m,
+                current_panel_cols
+            );
             // DGEMM: actualizar trailing submatrix
-            DGEMM(&A[(k + current_panel_cols) * N + k + current_panel_cols], N,
-                  &A[(k + current_panel_cols) * N + k], N,
-                  &A[k * N + k + current_panel_cols], N,
-                  m, n, current_panel_cols);
+            DGEMM_cublas(
+                handle,
+                &A[(k + current_panel_cols) * N + k + current_panel_cols], // dA
+                N,
+                &A[(k + current_panel_cols) * N + k], // dB
+                N,
+                &A[k * N + k + current_panel_cols], // dC
+                N,
+                m,
+                n,
+                current_panel_cols
+            );
         }
     }
+
+    // --- Destroy cuBLAS handle ---
+    cublasDestroy(handle);
 }

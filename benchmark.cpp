@@ -3,7 +3,7 @@
 #include <fstream>
 #include <lapacke.h>
 #include <vector>
-// #include "MPF.cu"
+#include "MPF.cu"
 #include <chrono>
 #include <cstring>
 #include <cblas.h>
@@ -203,16 +203,25 @@ int main(int argc, char **argv) {
         memcpy(data_mpf, data_original, n * n * sizeof(double));
 
 
-        if (verbose && n < 10) {
-            print_sqrMatrix("Original matrix:", data_mpf, n);
-        }
+        print_sqrMatrix("Original matrix:", data_mpf, n);
+
 
         // Benchmark MPF (your LU factorization)
         std::vector<int> ipiv_mpf;
         auto start = chrono::high_resolution_clock::now();
-        // MPF(data_mpf, n, 32, ipiv_mpf);
+        MPF(data_mpf, n, 32, ipiv_mpf);
         auto end = chrono::high_resolution_clock::now();
         double mpf_time = chrono::duration<double>(end - start).count();
+
+        if (verbose) {
+            cout << "MPF() time: " << mpf_time << " seconds\n" << endl;
+        }
+
+        if (check_correct) {
+            if (!check_correctitude(data_original, data_mpf, ipiv_mpf.data(), n, verbose)) {
+                cout << "MPF produced incorrect results." << endl;
+            }
+        }
 
         // Benchmark LAPACKE_dgetrf
         int *ipiv = new int[n];
@@ -227,16 +236,12 @@ int main(int argc, char **argv) {
         }
 
         if (verbose) {
-            cout << "MPF() time: " << mpf_time << " seconds\n" << endl;
             cout << "LAPACKE_dgetrf time: " << lapack_time << " seconds\n" << endl;
         }
 
         if (check_correct) {
             if (!check_correctitude(data_original, data_dgetrf, ipiv, n, verbose)) {
                 cout << "LAPACKE_dgetrf produced incorrect results." << endl;
-            }
-            if (!check_correctitude(data_original, data_mpf, ipiv, n, verbose)) {
-                cout << "MPF produced incorrect results." << endl;
             }
         }
 
