@@ -3,7 +3,7 @@
 #include <fstream>
 #include <lapacke.h>
 #include <vector>
-#include "MPF.cu"
+#include "MPF_refactor.h"
 #include <chrono>
 #include <cstring>
 #include <cblas.h>
