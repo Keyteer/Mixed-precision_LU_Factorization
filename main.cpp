@@ -7,7 +7,7 @@
 #include <cstring>
 #include <cblas.h>
 #include <iostream>
-#include "dgetf2_native.cpp"
+#include "dgetf2_native_npv.h"
 
 using namespace std;
 
@@ -155,7 +155,7 @@ int main() {
     int ipiv[3] = {3,2,3};
     int info;
 
-    dgetf2_native(m, n, A, m, ipiv, info);
+    dgetf2_native_npv(m, n, A, m, ipiv, info);
 
     std::cout << "LU Factorized Matrix:\n";
     for (int i = 0; i < m; ++i) {

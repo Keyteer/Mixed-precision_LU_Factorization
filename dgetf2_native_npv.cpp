@@ -1,9 +1,6 @@
-#include <iostream>
-#include <vector>
+#include "dgetf2_native_npv.h"
 #include <cmath>
 #include <algorithm>
-
-using namespace std;
 
 void dgetf2_native_npv(int m, int n, double *A, int lda, int *ipiv, int &info) {
     const double ONE = 1.0;
@@ -17,7 +14,7 @@ void dgetf2_native_npv(int m, int n, double *A, int lda, int *ipiv, int &info) {
     } else if (n < 0) {
         info = -2;
         return;
-    } else if (lda < max(1, m)) {
+    } else if (lda < std::max(1, m)) {
         info = -4;
         return;
     }
@@ -26,15 +23,14 @@ void dgetf2_native_npv(int m, int n, double *A, int lda, int *ipiv, int &info) {
         return;
 
     double sfmin = 2.2250738585072014e-308; // Safe minimum for double (approximate DBL_MIN)
-    // Assume ipiv is already filled with pivot indices (0-based)
-    int min_mn = min(m, n);
+    int min_mn = std::min(m, n);
     for (int j = 0; j < min_mn; ++j) {
         int jp = ipiv[j];
 
         // Swap rows jp and j if needed
         if (jp != j) {
             for (int k = 0; k < n; ++k) {
-                swap(A[j + k * lda], A[jp + k * lda]);
+                std::swap(A[j + k * lda], A[jp + k * lda]);
             }
         }
 
@@ -45,7 +41,7 @@ void dgetf2_native_npv(int m, int n, double *A, int lda, int *ipiv, int &info) {
 
         // Scale sub-column below pivot
         if (j < m - 1) {
-            if (abs(A[j + j * lda]) >= sfmin) {
+            if (std::abs(A[j + j * lda]) >= sfmin) {
                 double inv_pivot = ONE / A[j + j * lda];
                 for (int i = j + 1; i < m; ++i) {
                     A[i + j * lda] *= inv_pivot;
