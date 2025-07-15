@@ -126,6 +126,11 @@ void MPF(double* h_A, int N, int r, int *IPIV) {
     int* d_IPIV;
     cudaMalloc(&d_IPIV, N * sizeof(int));
 
+    // Initialize IPIV to identity permutation
+    int* h_IPIV = new int[N];
+    for (int i = 0; i < N; i++) h_IPIV[i] = i + 1; // 1-based indexing
+    cudaMemcpy(d_IPIV, h_IPIV, N * sizeof(int), cudaMemcpyHostToDevice);
+
     cublasHandle_t handle;
     cublasCreate(&handle);
 
@@ -133,30 +138,57 @@ void MPF(double* h_A, int N, int r, int *IPIV) {
         int current_panel_cols = std::min(r, N - k);
         int panel_rows = N - k;
 
-        // a. Copy panel to FP16 (kernel or thrust::transform for efficiency)
-        // (for simplicity, do it on host and copy, but for full GPU, write a kernel)
-        std::vector<fp16> h_panel(panel_rows * current_panel_cols);
-        cudaMemcpy2D(h_panel.data(), panel_rows * sizeof(fp16),
+        // a. Copy panel to FP16 buffer on device
+        // First copy to FP64 buffer, then convert to FP16
+        cudaMemcpy2D(d_P_FP64_NPV_buffer, panel_rows * sizeof(double),
                      d_A + k * N + k, N * sizeof(double),
                      current_panel_cols * sizeof(double), panel_rows,
-                     cudaMemcpyDeviceToHost);
-        for (int j = 0; j < current_panel_cols; ++j)
-            for (int i = 0; i < panel_rows; ++i)
-                h_panel[j * panel_rows + i] = double_to_fp16(h_A[(k + j) * N + (k + i)]);
-        cudaMemcpy(d_P_FP16_buffer, h_panel.data(), panel_rows * current_panel_cols * sizeof(fp16), cudaMemcpyHostToDevice);
+                     cudaMemcpyDeviceToDevice);
+
+        // Convert FP64 panel to FP16 (you need a conversion kernel here)
+        // For now, do it on host as a temporary solution
+        double* h_panel_fp64 = new double[panel_rows * current_panel_cols];
+        cudaMemcpy(h_panel_fp64, d_P_FP64_NPV_buffer, 
+                   panel_rows * current_panel_cols * sizeof(double), 
+                   cudaMemcpyDeviceToHost);
+        
+        fp16* h_panel_fp16 = new fp16[panel_rows * current_panel_cols];
+        for (int i = 0; i < panel_rows * current_panel_cols; ++i) {
+            h_panel_fp16[i] = double_to_fp16(h_panel_fp64[i]);
+        }
+        cudaMemcpy(d_P_FP16_buffer, h_panel_fp16, 
+                   panel_rows * current_panel_cols * sizeof(fp16), 
+                   cudaMemcpyHostToDevice);
 
         // b.i. Panel LU in FP16 (kernel)
         int threads = std::min(1024, panel_rows - 1);
-        HGETF2_kernel<<<1, threads>>>(d_P_FP16_buffer, panel_rows, panel_rows, current_panel_cols, d_IPIV_panel);
-        cudaDeviceSynchronize();
+        if (threads > 0) {
+            HGETF2_kernel<<<1, threads>>>(d_P_FP16_buffer, panel_rows, panel_rows, current_panel_cols, d_IPIV_panel);
+            cudaDeviceSynchronize();
+        }
 
         // b.ii. Apply permutations to FP64 matrix (kernel)
         LASWP_kernel<<<(current_panel_cols + 255) / 256, 256>>>(d_A, N, k, current_panel_cols, d_IPIV_panel);
         cudaDeviceSynchronize();
 
-        // b.iii. Panel LU in FP64 (no pivoting, kernel)
-        DGETF2_NATIVE_NPV_kernel<<<1, threads>>>(d_P_FP64_NPV_buffer, panel_rows, panel_rows, current_panel_cols);
-        cudaDeviceSynchronize();
+        // Update global IPIV array
+        int* h_panel_ipiv = new int[current_panel_cols];
+        cudaMemcpy(h_panel_ipiv, d_IPIV_panel, current_panel_cols * sizeof(int), cudaMemcpyDeviceToHost);
+        for (int j = 0; j < current_panel_cols; ++j) {
+            h_IPIV[k + j] = k + h_panel_ipiv[j];
+        }
+
+        // b.iii. Copy updated panel back for FP64 factorization
+        cudaMemcpy2D(d_P_FP64_NPV_buffer, panel_rows * sizeof(double),
+                     d_A + k * N + k, N * sizeof(double),
+                     current_panel_cols * sizeof(double), panel_rows,
+                     cudaMemcpyDeviceToDevice);
+
+        // Panel LU in FP64 (no pivoting, kernel)
+        if (threads > 0) {
+            DGETF2_NATIVE_NPV_kernel<<<1, threads>>>(d_P_FP64_NPV_buffer, panel_rows, panel_rows, current_panel_cols);
+            cudaDeviceSynchronize();
+        }
 
         // Copy back the panel to d_A
         cudaMemcpy2D(d_A + k * N + k, N * sizeof(double),
@@ -194,9 +226,10 @@ void MPF(double* h_A, int N, int r, int *IPIV) {
 
     // Copy result back to host
     cudaMemcpy(h_A, d_A, N * N * sizeof(double), cudaMemcpyDeviceToHost);
-    cudaMemcpy(IPIV, d_IPIV, N * sizeof(int), cudaMemcpyDeviceToHost);
+    memcpy(IPIV, h_IPIV, N * sizeof(int));
 
     // Cleanup
+    delete[] h_IPIV;
     cudaFree(d_A);
     cudaFree(d_P_FP16_buffer);
     cudaFree(d_P_FP64_NPV_buffer);
