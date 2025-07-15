@@ -3,7 +3,7 @@
 #include <fstream>
 #include <lapacke.h>
 #include <vector>
-#include "MPF_refactor.h"
+#include "MPF.h"
 #include <chrono>
 #include <cstring>
 #include <cblas.h>
@@ -207,7 +207,7 @@ int main(int argc, char **argv) {
 
 
         // Benchmark MPF (your LU factorization)
-        std::vector<int> ipiv_mpf;
+        int ipiv_mpf[n];
         auto start = chrono::high_resolution_clock::now();
         MPF(data_mpf, n, 32, ipiv_mpf);
         auto end = chrono::high_resolution_clock::now();
@@ -218,7 +218,7 @@ int main(int argc, char **argv) {
         }
 
         if (check_correct) {
-            if (!check_correctitude(data_original, data_mpf, ipiv_mpf.data(), n, verbose)) {
+            if (!check_correctitude(data_original, data_mpf, ipiv_mpf, n, verbose)) {
                 cout << "MPF produced incorrect results." << endl;
             }
         }
