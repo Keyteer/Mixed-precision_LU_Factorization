@@ -16,7 +16,8 @@ __device__ inline void swap_fp16(fp16 &a, fp16 &b) {
     b = tmp;
 }
 
-fp16 double_to_fp16(double x) {
+// Make these functions callable from both host and device
+__host__ __device__ inline fp16 double_to_fp16(double x) {
     float xf = static_cast<float>(x);
     constexpr float FP16_MAX = 65504.0f;
     constexpr float FP16_MIN_POS = 6.10352e-05f;
@@ -26,8 +27,24 @@ fp16 double_to_fp16(double x) {
     return __float2half_rn(xf);
 }
 
-double fp16_to_double(fp16 x) {
+__host__ __device__ inline double fp16_to_double(fp16 x) {
     return static_cast<double>(__half2float(x));
+}
+
+// GPU kernel for FP64 to FP16 conversion
+__global__ void double_to_fp16_block(const double* input, fp16* output, int size) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        output[idx] = double_to_fp16(input[idx]);
+    }
+}
+
+// GPU kernel for FP16 to FP64 conversion
+__global__ void fp16_to_double_block(const fp16* input, double* output, int size) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        output[idx] = fp16_to_double(input[idx]);
+    }
 }
 
 // CUDA kernel for HGETF2 (panel LU in FP16)
@@ -135,8 +152,8 @@ void MPF(double *h_A, int N, int r, int *IPIV) {
     cublasCreate(&handle);
 
     for (int k = 0; k < N; k += r) {
-        int current_panel_cols = std::min(r, N - k);
-        int panel_rows = N - k;
+        int current_panel_cols = std::min(r, N - k); // Number of columns in the current panel (r or N%r)
+        int panel_rows = N - k; // Number of rows in the panel
 
         // a. Copy panel to FP16 buffer on device
         // First copy to FP64 buffer, then convert to FP16
@@ -147,18 +164,11 @@ void MPF(double *h_A, int N, int r, int *IPIV) {
 
         // Convert FP64 panel to FP16 (you need a conversion kernel here)
         // For now, do it on host as a temporary solution
-        double *h_panel_fp64 = new double[panel_rows * current_panel_cols];
-        cudaMemcpy(h_panel_fp64, d_P_FP64_NPV_buffer,
-            panel_rows * current_panel_cols * sizeof(double),
-            cudaMemcpyDeviceToHost);
-
-        fp16 *h_panel_fp16 = new fp16[panel_rows * current_panel_cols];
-        for (int i = 0; i < panel_rows * current_panel_cols; ++i) {
-            h_panel_fp16[i] = double_to_fp16(h_panel_fp64[i]);
-        }
-        cudaMemcpy(d_P_FP16_buffer, h_panel_fp16,
-            panel_rows * current_panel_cols * sizeof(fp16),
-            cudaMemcpyHostToDevice);
+        int total_elements = panel_rows * current_panel_cols;
+        dim3 block(256);
+        dim3 grid((total_elements + 255) / 256);
+        double_to_fp16_block<<<grid, block>>>(d_P_FP64_NPV_buffer, d_P_FP16_buffer, total_elements);
+        cudaDeviceSynchronize();
 
         // b.i. Panel LU in FP16 (kernel)
         int threads = std::min(1024, panel_rows - 1);
