@@ -88,7 +88,7 @@ void row_permute(double *A, const int *ipiv, int n) {
         if (piv != i) {
             // Swap rows i and piv
             for (int j = 0; j < n; ++j) {
-                std::swap(A[i * n + j], A[piv * n + j]);
+                swap(A[i * n + j], A[piv * n + j]);
             }
         }
     }
@@ -163,7 +163,7 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    ofstream csv("benchmark_times.csv", ios::app);
+    ofstream csv("benchmark_times.csv");
     csv << "matrix_size,mpf_time,lapack_time\n" << fixed << setprecision(10);
 
     int num_matrices;
@@ -207,7 +207,7 @@ int main(int argc, char **argv) {
 
 
         // Benchmark MPF (your LU factorization)
-        int ipiv_mpf[n];
+        int* ipiv_mpf = new int[n];
         auto start = chrono::high_resolution_clock::now();
         MPF(data_mpf, n, 32, ipiv_mpf);
         auto end = chrono::high_resolution_clock::now();

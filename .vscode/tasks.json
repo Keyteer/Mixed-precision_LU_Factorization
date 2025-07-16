@@ -9,7 +9,7 @@
                 "benchmark.cpp",
                 "MPF.cu",
                 "hgetf2_kernel.cu",
-                "-arch=sm_53",
+                "-arch=native",
                 "-lcublas",
                 "-lcudart",
                 "-llapacke",

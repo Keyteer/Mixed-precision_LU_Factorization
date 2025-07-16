@@ -83,14 +83,13 @@ void MPF(double *h_A, int N, int r, int *IPIV) {
     int *d_IPIV_panel;
     cudaMalloc(&d_IPIV_panel, r * sizeof(int));
     int ident_ipiv_panel[r]; // Identity permutation for panel
-    for (int i = 0; i < r; ++i) {
-        ident_ipiv_panel[i] = i + 1; // Initialize to identity permutation
-    }
     cudaMemcpy(d_IPIV_panel, ident_ipiv_panel, r * sizeof(int), cudaMemcpyHostToDevice);
     
     
     int *d_IPIV;
     cudaMalloc(&d_IPIV, N * sizeof(int));
+
+
 
     // Initialize IPIV to identity permutation
     int *h_IPIV = new int[N];
@@ -201,7 +200,9 @@ void MPF(double *h_A, int N, int r, int *IPIV) {
     // Copy result back to host
     cudaMemcpy(h_A, d_A, N * N * sizeof(double), cudaMemcpyDeviceToHost);
     memcpy(IPIV, h_IPIV, N * sizeof(int));
-
+    for (int i = 0; i < N; ++i) {
+        IPIV[i] = i + 1; // Initialize to identity permutation
+    }
     // Cleanup
     delete[] h_IPIV;
     cudaFree(d_A);
