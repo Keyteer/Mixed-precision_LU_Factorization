@@ -78,8 +78,17 @@ void MPF(double *h_A, int N, int r, int *IPIV) {
     cudaMalloc(&d_P_FP16_buffer, N * r * sizeof(fp16));
     double *d_P_FP64_NPV_buffer;
     cudaMalloc(&d_P_FP64_NPV_buffer, N * r * sizeof(double));
+
+    
     int *d_IPIV_panel;
     cudaMalloc(&d_IPIV_panel, r * sizeof(int));
+    int ident_ipiv_panel[r]; // Identity permutation for panel
+    for (int i = 0; i < r; ++i) {
+        ident_ipiv_panel[i] = i + 1; // Initialize to identity permutation
+    }
+    cudaMemcpy(d_IPIV_panel, ident_ipiv_panel, r * sizeof(int), cudaMemcpyHostToDevice);
+    
+    
     int *d_IPIV;
     cudaMalloc(&d_IPIV, N * sizeof(int));
 
@@ -110,14 +119,27 @@ void MPF(double *h_A, int N, int r, int *IPIV) {
         double_to_fp16_block<<<grid, block>>>(d_P_FP64_NPV_buffer, d_P_FP16_buffer, total_elements);
         cudaDeviceSynchronize();
 
+        int ipiv_panel_print[r];
+        cudaMemcpy(ipiv_panel_print, d_IPIV_panel, r * sizeof(int), cudaMemcpyDeviceToHost);
+        // Debug print for IPIV panel
+        std::cout << "IPIV panel: ";
+        for (int i = 0; i < current_panel_cols; ++i)
+            std::cout << ipiv_panel_print[i] << " ";
+        std::cout << std::endl;
+
         // b.i. Panel LU in FP16 (kernel)
         int threads = std::min(1024, panel_rows - 1);
         if (threads > 0) {
-            // Calculate dynamic shared memory size: threads * (sizeof(fp16) + sizeof(int))
-            size_t shared_mem_size = threads * (sizeof(fp16) + sizeof(int));
-            HGETF2_kernel << <1, threads, shared_mem_size >> > (d_P_FP16_buffer, panel_rows, panel_rows, current_panel_cols, d_IPIV_panel);
+            HGETF2_kernel << <1, threads >> > (d_P_FP16_buffer, panel_rows, panel_rows, current_panel_cols, d_IPIV_panel);
             cudaDeviceSynchronize();
         }
+
+        cudaMemcpy(ipiv_panel_print, d_IPIV_panel, r * sizeof(int), cudaMemcpyDeviceToHost);
+        // Debug print for IPIV panel
+        std::cout << "IPIV panel: ";
+        for (int i = 0; i < current_panel_cols; ++i)
+            std::cout << ipiv_panel_print[i] << " ";
+        std::cout << std::endl;
 
         // b.ii. Apply permutations to FP64 matrix (kernel)
         LASWP_kernel << <(current_panel_cols + 255) / 256, 256 >> > (d_A, N, k, current_panel_cols, d_IPIV_panel);
