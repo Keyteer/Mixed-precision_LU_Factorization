@@ -7,29 +7,7 @@
 #include <cuda_runtime.h>
 #include <lapacke.h>
 #include <cublas_v2.h>
-
-using fp16 = __half;
-
-__device__ inline void swap_fp16(fp16 &a, fp16 &b) {
-    fp16 tmp = a;
-    a = b;
-    b = tmp;
-}
-
-// Make these functions callable from both host and device
-__host__ __device__ inline fp16 double_to_fp16(double x) {
-    float xf = static_cast<float>(x);
-    constexpr float FP16_MAX = 65504.0f;
-    constexpr float FP16_MIN_POS = 6.10352e-05f;
-    if (xf > FP16_MAX) xf = FP16_MAX;
-    else if (xf < -FP16_MAX) xf = -FP16_MAX;
-    if (xf > -FP16_MIN_POS && xf < FP16_MIN_POS) xf = 0.0f;
-    return __float2half_rn(xf);
-}
-
-__host__ __device__ inline double fp16_to_double(fp16 x) {
-    return static_cast<double>(__half2float(x));
-}
+#include "hgetf2_kernel.h"
 
 // GPU kernel for FP64 to FP16 conversion
 __global__ void double_to_fp16_block(const double* input, fp16* output, int size) {
@@ -44,44 +22,6 @@ __global__ void fp16_to_double_block(const fp16* input, double* output, int size
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < size) {
         output[idx] = fp16_to_double(input[idx]);
-    }
-}
-
-// CUDA kernel for HGETF2 (panel LU in FP16)
-__global__ void HGETF2_kernel(fp16 *panel, int ld, int rows, int cols, int *ipiv_panel) {
-    int tid = threadIdx.x;
-    for (int j = 0; j < cols; ++j) {
-        int piv = j;
-        // Use fabsf(__half2float(x)) instead of __habs(x)
-        fp16 maxval = __float2half(fabsf(__half2float(panel[j * ld + j])));
-        if (tid == 0) {
-            for (int i = j + 1; i < rows; ++i) {
-                fp16 val = __float2half(fabsf(__half2float(panel[j * ld + i])));
-                if (val > maxval) {
-                    maxval = val;
-                    piv = i;
-                }
-            }
-            ipiv_panel[j] = piv;
-        }
-        __syncthreads();
-        if (tid == 0 && piv != j) {
-            for (int k = 0; k < cols; ++k)
-                swap_fp16(panel[k * ld + j], panel[k * ld + piv]);
-        }
-        __syncthreads();
-        int i = j + 1 + tid;
-        if (i < rows) {
-            // Use operator overloads instead of intrinsics
-            fp16 lij = panel[j * ld + i] / panel[j * ld + j];
-            panel[j * ld + i] = lij;
-            for (int k = j + 1; k < cols; ++k) {
-                fp16 a = panel[k * ld + i];
-                fp16 b = panel[k * ld + j];
-                panel[k * ld + i] = a - b * lij;
-            }
-        }
-        __syncthreads();
     }
 }
 
@@ -173,7 +113,9 @@ void MPF(double *h_A, int N, int r, int *IPIV) {
         // b.i. Panel LU in FP16 (kernel)
         int threads = std::min(1024, panel_rows - 1);
         if (threads > 0) {
-            HGETF2_kernel << <1, threads >> > (d_P_FP16_buffer, panel_rows, panel_rows, current_panel_cols, d_IPIV_panel);
+            // Calculate dynamic shared memory size: threads * (sizeof(fp16) + sizeof(int))
+            size_t shared_mem_size = threads * (sizeof(fp16) + sizeof(int));
+            HGETF2_kernel << <1, threads, shared_mem_size >> > (d_P_FP16_buffer, panel_rows, panel_rows, current_panel_cols, d_IPIV_panel);
             cudaDeviceSynchronize();
         }
 
@@ -245,5 +187,4 @@ void MPF(double *h_A, int N, int r, int *IPIV) {
     cudaFree(d_P_FP64_NPV_buffer);
     cudaFree(d_IPIV_panel);
     cudaFree(d_IPIV);
-    cublasDestroy(handle);
 }
