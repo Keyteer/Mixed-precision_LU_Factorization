@@ -10,7 +10,7 @@
 
 using namespace std;
 
-// Helper function to print a matrix (column-major order)
+// Helper function to print a matrix
 void print_sqrMatrix(const char *msg, double *mat, int n, bool verbose = true) {
     if (verbose && n < 10) {
         cout << msg << endl;
@@ -26,7 +26,7 @@ void print_sqrMatrix(const char *msg, double *mat, int n, bool verbose = true) {
 
 void print_LU(const double *lu, int n, bool verbose = true) {
     if (verbose && n < 10) {
-        // Print L (column-major order)
+        // Print L
         cout << "L matrix:" << endl;
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
@@ -41,7 +41,7 @@ void print_LU(const double *lu, int n, bool verbose = true) {
         }
         cout << endl;
 
-        // Print U (column-major order)
+        // Print U
         cout << "U matrix:" << endl;
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
@@ -57,7 +57,7 @@ void print_LU(const double *lu, int n, bool verbose = true) {
 }
 
 void get_LU(const double *A, double *L, double *U, int n) {
-    // Extract L and U from the LU factorization (column-major order)
+    // Extract L and U from the LU factorization
     for (int i = 0; i < n; ++i) {
         for (int j = 0; j < n; ++j) {
             if (i > j) {
@@ -82,11 +82,11 @@ void multiply_sqrMatrices(const double *A, const double *B, double *C, int n) {
 }
 
 void row_permute(double *A, const int *ipiv, int n) {
-    // Apply the pivot swaps (column-major order)
+    // Apply the pivot swaps
     for (int i = n - 1; i >= 0; --i) {
         int piv = ipiv[i] - 1; // Convert to 0-based
         if (piv != i) {
-            // Swap rows i and piv (in column-major, swap across all columns)
+            // Swap rows i and piv
             for (int j = 0; j < n; ++j) {
                 swap(A[j * n + i], A[j * n + piv]); // Column-major: A[col * lda + row]
             }

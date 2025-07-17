@@ -3,10 +3,9 @@
 #include <cstring>
 #include <vector>
 #include <iostream>
-#include <cuda_fp16.h>
-#include <cuda_runtime.h>
 #include <lapacke.h>
 #include <cublas_v2.h>
+#include "fp16_utils.h"
 #include "hgetf2_kernel.h"
 
 // GPU kernel for FP64 to FP16 conversion
@@ -70,7 +69,12 @@ void DGEMM_cublas(cublasHandle_t handle, double *dA, int lda, double *dB, int ld
 
 // --- MPF: All on GPU ---
 // h_A [in] 
-void MPF(double *h_A, int N, int r, int *IPIV) {
+void MPF(double *A, int N, int r, int *IPIV) {
+    
+    // Initialize host memory
+    double *h_A = new double[N * N];
+    std::memcpy(h_A, A, N * N * sizeof(double));
+
     // Allocate device memory
     double *d_A;
     cudaMalloc(&d_A, N * N * sizeof(double));
@@ -85,6 +89,8 @@ void MPF(double *h_A, int N, int r, int *IPIV) {
     int *d_IPIV_panel;
     cudaMalloc(&d_IPIV_panel, r * sizeof(int));
     int ident_ipiv_panel[r]; // Identity permutation for panel
+    for (int i = 0; i < r; i++) ident_ipiv_panel[i] = i + 1; // 1-based indexing
+    // Initialize IPIV panel to identity permutation
     cudaMemcpy(d_IPIV_panel, ident_ipiv_panel, r * sizeof(int), cudaMemcpyHostToDevice);
     
     
@@ -143,8 +149,30 @@ void MPF(double *h_A, int N, int r, int *IPIV) {
         std::cout << std::endl;
 
         // b.ii. Apply permutations to FP64 matrix (kernel)
-        LASWP_kernel << <(current_panel_cols + 255) / 256, 256 >> > (d_A, N, k, current_panel_cols, d_IPIV_panel);
-        cudaDeviceSynchronize();
+        // LASWP_kernel << <(current_panel_cols + 255) / 256, 256 >> > (d_A, N, k, current_panel_cols, d_IPIV_panel);
+        // cudaDeviceSynchronize();
+
+
+        // Copy panel from device to host
+        cudaMemcpy2D(h_A, N * sizeof(double),
+                     d_A + k * N + k, N * sizeof(double),
+                     N * sizeof(double), N,
+                     cudaMemcpyDeviceToHost);
+
+        // Copy IPIV panel from device to host for LAPACKE_dlaswp
+        int* h_ipiv_panel = new int[current_panel_cols];
+        cudaMemcpy(h_ipiv_panel, d_IPIV_panel, current_panel_cols * sizeof(int), cudaMemcpyDeviceToHost);
+
+        // Apply row swaps using LAPACKE_dlaswp (1-based ipiv)
+        LAPACKE_dlaswp(LAPACK_COL_MAJOR, panel_rows, h_A, N, 1, current_panel_cols, h_ipiv_panel, 1);
+
+        delete[] h_ipiv_panel;
+
+        // Copy updated panel back to device
+        cudaMemcpy2D(d_A + k * N + k, N * sizeof(double),
+                     h_A, N * sizeof(double),
+                     N * sizeof(double), N,
+                     cudaMemcpyHostToDevice);
 
         // Update global IPIV array
         int *h_panel_ipiv = new int[current_panel_cols];
@@ -161,6 +189,9 @@ void MPF(double *h_A, int N, int r, int *IPIV) {
             current_panel_cols * sizeof(double), panel_rows,
             cudaMemcpyDeviceToDevice);
 
+
+
+            
         // Panel LU in FP64 (no pivoting, kernel)
         if (threads > 0) {
             DGETF2_NATIVE_NPV_kernel << <1, threads >> > (d_P_FP64_NPV_buffer, panel_rows, panel_rows, current_panel_cols);
@@ -203,10 +234,20 @@ void MPF(double *h_A, int N, int r, int *IPIV) {
 
     // Copy result back to host
     cudaMemcpy(h_A, d_A, N * N * sizeof(double), cudaMemcpyDeviceToHost);
+    memcpy(A, h_A, N * N * sizeof(double));
+
+    // Copy IPIV back to host
     memcpy(IPIV, h_IPIV, N * sizeof(int));
 
+    ////////////// REMOVE //////////////////////////////
+    for (int i = 0; i < N; ++i) {
+        IPIV[i] = i + 1; // Initialize to identity permutation
+    }
+    ////////////////////////////////////////////////////
+
     // Cleanup
-    cublasDestroy(handle);
+    // cublasDestroy(handle);
+    delete[] h_A;
     delete[] h_IPIV;
     cudaFree(d_A);
     cudaFree(d_P_FP16_buffer);

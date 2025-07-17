@@ -26,7 +26,7 @@ void print_sqrMatrix(const char *msg, double *mat, int n, bool verbose = true) {
 
 void print_LU(const double *lu, int n, bool verbose = true) {
     if (verbose && n < 10) {
-        // Print L (column-major order)
+        // Print L
         cout << "L matrix:" << endl;
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
@@ -41,7 +41,7 @@ void print_LU(const double *lu, int n, bool verbose = true) {
         }
         cout << endl;
 
-        // Print U (column-major order)
+        // Print U
         cout << "U matrix:" << endl;
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {

@@ -2,7 +2,8 @@
 #include <cmath>
 #include <algorithm>
 
-void dgetf2_native_npv(int m, int n, double *A, int lda, int *ipiv, int &info) {
+__global__ void dgetf2_native_npv(int m, int n, double *A, int lda, int *ipiv, int &info) {
+
     const double ONE = 1.0;
     const double ZERO = 0.0;
 
