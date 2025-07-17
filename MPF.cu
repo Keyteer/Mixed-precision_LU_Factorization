@@ -7,6 +7,7 @@
 #include <cublas_v2.h>
 #include "fp16_utils.h"
 #include "hgetf2_kernel.h"
+#include "dgetf2_native_npv.h"
 
 // GPU kernel for FP64 to FP16 conversion
 __global__ void double_to_fp16_block(const double* input, fp16* output, int size) {
@@ -21,19 +22,6 @@ __global__ void fp16_to_double_block(const fp16* input, double* output, int size
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < size) {
         output[idx] = fp16_to_double(input[idx]);
-    }
-}
-
-// Device version of DGETF2_NATIVE_NPV (no pivoting, FP64)
-__global__ void DGETF2_NATIVE_NPV_kernel(double *panel, int ld, int rows, int cols) {
-    for (int j = 0; j < cols; ++j) {
-        int i = threadIdx.x + j + 1;
-        if (i < rows) {
-            panel[j * ld + i] /= panel[j * ld + j];
-            for (int k = j + 1; k < cols; ++k)
-                panel[k * ld + i] -= panel[k * ld + j] * panel[j * ld + i];
-        }
-        __syncthreads();
     }
 }
 
@@ -194,7 +182,7 @@ void MPF(double *A, int N, int r, int *IPIV) {
             
         // Panel LU in FP64 (no pivoting, kernel)
         if (threads > 0) {
-            DGETF2_NATIVE_NPV_kernel << <1, threads >> > (d_P_FP64_NPV_buffer, panel_rows, panel_rows, current_panel_cols);
+            // DGETF2_NATIVE_NPV_kernel << <1, threads >> > (d_P_FP64_NPV_buffer, panel_rows, panel_rows, current_panel_cols);
             cudaDeviceSynchronize();
         }
 

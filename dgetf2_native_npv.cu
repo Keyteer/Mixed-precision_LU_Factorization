@@ -15,7 +15,7 @@ __global__ void dgetf2_native_npv(int m, int n, double *A, int lda, int *ipiv, i
     } else if (n < 0) {
         info = -2;
         return;
-    } else if (lda < std::max(1, m)) {
+    } else if (lda < m || lda < 1) {
         info = -4;
         return;
     }
@@ -24,14 +24,17 @@ __global__ void dgetf2_native_npv(int m, int n, double *A, int lda, int *ipiv, i
         return;
 
     double sfmin = 2.2250738585072014e-308; // Safe minimum for double (approximate DBL_MIN)
-    int min_mn = std::min(m, n);
+    int min_mn = m < n ? m : n;
     for (int j = 0; j < min_mn; ++j) {
         int jp = ipiv[j];
 
         // Swap rows jp and j if needed
         if (jp != j) {
             for (int k = 0; k < n; ++k) {
-                std::swap(A[j + k * lda], A[jp + k * lda]);
+                //std::swap(A[j + k * lda], A[jp + k * lda]);
+                double temp = A[j + k * lda];
+                A[j + k * lda] = A[jp + k * lda];
+                A[jp + k * lda] = temp;
             }
         }
 
@@ -42,7 +45,7 @@ __global__ void dgetf2_native_npv(int m, int n, double *A, int lda, int *ipiv, i
 
         // Scale sub-column below pivot
         if (j < m - 1) {
-            if (std::abs(A[j + j * lda]) >= sfmin) {
+            if ((A[j + j * lda] > 0 ? A[j + j * lda] : - A[j + j * lda]) >= sfmin) {
                 double inv_pivot = ONE / A[j + j * lda];
                 for (int i = j + 1; i < m; ++i) {
                     A[i + j * lda] *= inv_pivot;
