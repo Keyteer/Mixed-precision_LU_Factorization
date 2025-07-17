@@ -7,7 +7,9 @@
             "command": "nvcc",
             "args": [
                 "benchmark.cpp",
-                "*.cu",
+                "MPF.cu",
+                "hgetf2_kernel.cu",
+                "dgetf2_native_npv.cpp",
                 "-arch=native",
                 "-lcublas",
                 "-lcudart",
@@ -23,6 +25,28 @@
                 "kind": "build",
                 "isDefault": true
             },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": "$nvcc"
+        },
+        {
+            "label": "build-simple-test",
+            "type": "shell",
+            "command": "nvcc",
+            "args": [
+                "simple_kernel_test.cu",
+                "hgetf2_kernel.cu",
+                "-g",
+                "-G",
+                "-O0",
+                "-o",
+                "simple_test"
+            ],
+            "group": "build",
             "presentation": {
                 "echo": true,
                 "reveal": "always",

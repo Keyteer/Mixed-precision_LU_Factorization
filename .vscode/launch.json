@@ -46,6 +46,20 @@
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "preLaunchTask": "build"
-        }
+        },
+        {
+            "name": "Run 3x3 Matrix",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/debug_program",
+            "args": ["matrix_3x3.txt"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "preLaunchTask": "build",
+            "miDebuggerPath": "/usr/bin/gdb"
+            }
     ]
 }
