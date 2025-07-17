@@ -34,7 +34,7 @@ __global__ void HGETF2_kernel(fp16 *panel, int ld, int rows, int cols, int *ipiv
         // Each thread checks one element for maximum
         if (tid + j < rows) {
             int row_idx = tid + j;
-            float val_f = fabsf(__half2float(panel[j * ld + row_idx]));
+            float val_f = __habs((panel[j * ld + row_idx]));
             max_vals[tid] = __float2half(val_f);
             piv_indices[tid] = row_idx;
             
