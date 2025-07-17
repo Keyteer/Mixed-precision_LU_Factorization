@@ -1,70 +1,29 @@
 #include "dgetf2_native_npv.h"
 #include <cmath>
-#include <algorithm>
 
-__global__ void dgetf2_native_npv(int m, int n, double *A, int lda, int *ipiv, int &info) {
+// CUDA kernel for DGETF2 (panel LU in double, no pivoting)
+// panel: [in/out] pointer to the panel matrix in double
+// ld: [in] leading dimension of the panel matrix
+// m: [in] number of rows in the panel
+// n: [in] number of columns in the panel
+__global__ void dgetf2_native_npv(int m, int n, double *panel, int ld) {
+    int tid = threadIdx.x;
 
-    const double ONE = 1.0;
-    const double ZERO = 0.0;
+    // Process each column sequentially (no pivoting, panel is pre-pivoted)
+    for (int j = 0; j < n; ++j) {
+        // Step 1: Gaussian elimination - compute multipliers and update (parallel)
+        int row_idx = tid + j + 1;
+        if (row_idx < m) {
+            // Compute multiplier
+            double pivot_val = panel[j * ld + j];
+            double multiplier = panel[j * ld + row_idx] / pivot_val;
+            panel[j * ld + row_idx] = multiplier;
 
-    info = 0;
-
-    if (m < 0) {
-        info = -1;
-        return;
-    } else if (n < 0) {
-        info = -2;
-        return;
-    } else if (lda < m || lda < 1) {
-        info = -4;
-        return;
-    }
-
-    if (m == 0 || n == 0)
-        return;
-
-    double sfmin = 2.2250738585072014e-308; // Safe minimum for double (approximate DBL_MIN)
-    int min_mn = m < n ? m : n;
-    for (int j = 0; j < min_mn; ++j) {
-        int jp = ipiv[j];
-
-        // Swap rows jp and j if needed
-        if (jp != j) {
-            for (int k = 0; k < n; ++k) {
-                //std::swap(A[j + k * lda], A[jp + k * lda]);
-                double temp = A[j + k * lda];
-                A[j + k * lda] = A[jp + k * lda];
-                A[jp + k * lda] = temp;
+            // Update remaining columns
+            for (int k = j + 1; k < n; ++k) {
+                panel[k * ld + row_idx] -= multiplier * panel[k * ld + j];
             }
         }
-
-        // Check for zero pivot
-        if (A[j + j * lda] == ZERO && info == 0) {
-            info = j + 1; // Fortran 1-based indexing
-        }
-
-        // Scale sub-column below pivot
-        if (j < m - 1) {
-            if ((A[j + j * lda] > 0 ? A[j + j * lda] : - A[j + j * lda]) >= sfmin) {
-                double inv_pivot = ONE / A[j + j * lda];
-                for (int i = j + 1; i < m; ++i) {
-                    A[i + j * lda] *= inv_pivot;
-                }
-            } else {
-                for (int i = j + 1; i < m; ++i) {
-                    A[i + j * lda] /= A[j + j * lda];
-                }
-            }
-        }
-
-        // Rank-1 update to trailing submatrix
-        if (j < min_mn - 1) {
-            for (int i = j + 1; i < m; ++i) {
-                double mult = A[i + j * lda];
-                for (int k = j + 1; k < n; ++k) {
-                    A[i + k * lda] -= mult * A[j + k * lda];
-                }
-            }
-        }
+        __syncthreads();
     }
 }

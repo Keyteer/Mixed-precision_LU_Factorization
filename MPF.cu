@@ -251,7 +251,7 @@ void MPF(double *A, int N, int r, int *IPIV) {
             
         // Panel LU in FP64 (no pivoting, kernel)
         if (threads > 0) {
-            // DGETF2_NATIVE_NPV_kernel << <1, threads >> > (d_P_FP64_NPV_buffer, panel_rows, panel_rows, current_panel_cols);
+            dgetf2_native_npv<<<1, threads>>>(panel_rows, current_panel_cols, d_P_FP64_NPV_buffer, panel_rows);
             cudaDeviceSynchronize();
         }
 
