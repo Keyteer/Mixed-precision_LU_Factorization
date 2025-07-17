@@ -7,8 +7,7 @@
             "command": "nvcc",
             "args": [
                 "benchmark.cpp",
-                "MPF.cu",
-                "hgetf2_kernel.cu",
+                "*.cu",
                 "-arch=native",
                 "-lcublas",
                 "-lcudart",
