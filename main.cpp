@@ -16,7 +16,7 @@ void print_sqrMatrix(const char *msg, double *mat, int n, bool verbose = true) {
         cout << msg << endl;
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < n; j++) {
-                cout << mat[i * n + j] << " ";
+                cout << mat[j * n + i] << " "; // Column-major: mat[col * lda + row]
             }
             cout << endl;
         }
@@ -26,12 +26,12 @@ void print_sqrMatrix(const char *msg, double *mat, int n, bool verbose = true) {
 
 void print_LU(const double *lu, int n, bool verbose = true) {
     if (verbose && n < 10) {
-        // Print L
+        // Print L (column-major order)
         cout << "L matrix:" << endl;
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
                 if (i > j)
-                    cout << lu[i * n + j] << " ";
+                    cout << lu[j * n + i] << " "; // Column-major: lu[col * lda + row]
                 else if (i == j)
                     cout << "1 ";
                 else
@@ -41,12 +41,12 @@ void print_LU(const double *lu, int n, bool verbose = true) {
         }
         cout << endl;
 
-        // Print U
+        // Print U (column-major order)
         cout << "U matrix:" << endl;
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
                 if (i <= j)
-                    cout << lu[i * n + j] << " ";
+                    cout << lu[j * n + i] << " "; // Column-major: lu[col * lda + row]
                 else
                     cout << "0 ";
             }
@@ -76,7 +76,7 @@ void get_LU(const double *A, double *L, double *U, int n) {
 
 void multiply_sqrMatrices(const double *A, const double *B, double *C, int n) {
     // C = A * B using BLAS
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+    cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans,
         n, n, n,
         1.0, A, n, B, n, 0.0, C, n);
 }

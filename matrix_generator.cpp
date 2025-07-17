@@ -45,11 +45,12 @@ int main(int argc, char **argv) {
     while (size <= maxSize) {
         fout << size << endl;
 
-        for (int i = 0; i < size; i++) {
-            for (int j = 0; j < size; j++) {
+        // Generate matrix in column-major order
+        for (int j = 0; j < size; j++) {
+            for (int i = 0; i < size; i++) {
                 fout << static_cast<double>(rand() % 100) / 10.0 << " "; // Random double values
             }
-            fout << endl;
+            if (j < size - 1) fout << endl;
         }
         fout << endl;
 

@@ -10,13 +10,13 @@
 
 using namespace std;
 
-// Helper function to print a matrix
+// Helper function to print a matrix (column-major order)
 void print_sqrMatrix(const char *msg, double *mat, int n, bool verbose = true) {
     if (verbose && n < 10) {
         cout << msg << endl;
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < n; j++) {
-                cout << mat[i * n + j] << " ";
+                cout << mat[j * n + i] << " "; // Column-major: mat[col * lda + row]
             }
             cout << endl;
         }
@@ -26,12 +26,12 @@ void print_sqrMatrix(const char *msg, double *mat, int n, bool verbose = true) {
 
 void print_LU(const double *lu, int n, bool verbose = true) {
     if (verbose && n < 10) {
-        // Print L
+        // Print L (column-major order)
         cout << "L matrix:" << endl;
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
                 if (i > j)
-                    cout << lu[i * n + j] << " ";
+                    cout << lu[j * n + i] << " "; // Column-major: lu[col * lda + row]
                 else if (i == j)
                     cout << "1 ";
                 else
@@ -41,12 +41,12 @@ void print_LU(const double *lu, int n, bool verbose = true) {
         }
         cout << endl;
 
-        // Print U
+        // Print U (column-major order)
         cout << "U matrix:" << endl;
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
                 if (i <= j)
-                    cout << lu[i * n + j] << " ";
+                    cout << lu[j * n + i] << " "; // Column-major: lu[col * lda + row]
                 else
                     cout << "0 ";
             }
@@ -57,38 +57,38 @@ void print_LU(const double *lu, int n, bool verbose = true) {
 }
 
 void get_LU(const double *A, double *L, double *U, int n) {
-    // Extract L and U from the LU factorization
+    // Extract L and U from the LU factorization (column-major order)
     for (int i = 0; i < n; ++i) {
         for (int j = 0; j < n; ++j) {
             if (i > j) {
-                L[i * n + j] = A[i * n + j];
-                U[i * n + j] = 0.0;
+                L[j * n + i] = A[j * n + i]; // Column-major: matrix[col * lda + row]
+                U[j * n + i] = 0.0;
             } else if (i == j) {
-                L[i * n + j] = 1.0;
-                U[i * n + j] = A[i * n + j];
+                L[j * n + i] = 1.0;
+                U[j * n + i] = A[j * n + i];
             } else {
-                L[i * n + j] = 0.0;
-                U[i * n + j] = A[i * n + j];
+                L[j * n + i] = 0.0;
+                U[j * n + i] = A[j * n + i];
             }
         }
     }
 }
 
 void multiply_sqrMatrices(const double *A, const double *B, double *C, int n) {
-    // C = A * B using BLAS
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+    // C = A * B using BLAS (column-major order)
+    cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans,
         n, n, n,
         1.0, A, n, B, n, 0.0, C, n);
 }
 
 void row_permute(double *A, const int *ipiv, int n) {
-    // Apply the pivot swaps
+    // Apply the pivot swaps (column-major order)
     for (int i = n - 1; i >= 0; --i) {
         int piv = ipiv[i] - 1; // Convert to 0-based
         if (piv != i) {
-            // Swap rows i and piv
+            // Swap rows i and piv (in column-major, swap across all columns)
             for (int j = 0; j < n; ++j) {
-                swap(A[i * n + j], A[piv * n + j]);
+                swap(A[j * n + i], A[j * n + piv]); // Column-major: A[col * lda + row]
             }
         }
     }
@@ -226,7 +226,7 @@ int main(int argc, char **argv) {
         // Benchmark LAPACKE_dgetrf
         int *ipiv = new int[n];
         start = chrono::high_resolution_clock::now();
-        int info = LAPACKE_dgetrf(LAPACK_ROW_MAJOR, n, n, data_dgetrf, n, ipiv);
+        int info = LAPACKE_dgetrf(LAPACK_COL_MAJOR, n, n, data_dgetrf, n, ipiv);
         end = chrono::high_resolution_clock::now();
         double lapack_time = chrono::duration<double>(end - start).count();
 

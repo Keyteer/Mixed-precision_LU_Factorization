@@ -38,16 +38,17 @@ __global__ void DGETF2_NATIVE_NPV_kernel(double *panel, int ld, int rows, int co
     }
 }
 
-// Device version of LASWP (row swaps, FP64)
-__global__ void LASWP_kernel(double *A, int n, int k, int cols, const int *ipiv_panel) {
+// Device version of LASWP (row swaps, FP64) - Column-major order
+__global__ void LASWP_kernel(double *A, int lda, int k, int cols, const int *ipiv_panel) {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     if (j < cols) {
-        int piv = ipiv_panel[j];
+        int piv = ipiv_panel[j] - 1; // Convert from 1-based to 0-based
         if (piv != j) {
-            for (int i = 0; i < n; ++i) {
-                double tmp = A[j * n + i + k * n];
-                A[j * n + i + k * n] = A[piv * n + i + k * n];
-                A[piv * n + i + k * n] = tmp;
+            // Swap rows j+k and piv+k for all columns (column-major)
+            for (int col = 0; col < lda; ++col) {
+                double tmp = A[col * lda + (j + k)];
+                A[col * lda + (j + k)] = A[col * lda + (piv + k)];
+                A[col * lda + (piv + k)] = tmp;
             }
         }
     }
@@ -68,6 +69,7 @@ void DGEMM_cublas(cublasHandle_t handle, double *dA, int lda, double *dB, int ld
 }
 
 // --- MPF: All on GPU ---
+// h_A [in] 
 void MPF(double *h_A, int N, int r, int *IPIV) {
     // Allocate device memory
     double *d_A;
@@ -148,8 +150,10 @@ void MPF(double *h_A, int N, int r, int *IPIV) {
         int *h_panel_ipiv = new int[current_panel_cols];
         cudaMemcpy(h_panel_ipiv, d_IPIV_panel, current_panel_cols * sizeof(int), cudaMemcpyDeviceToHost);
         for (int j = 0; j < current_panel_cols; ++j) {
-            h_IPIV[k + j] = k + h_panel_ipiv[j];
+            // h_panel_ipiv[j] is already 1-based from kernel, add k offset
+            h_IPIV[k + j] = h_panel_ipiv[j] + k;
         }
+        delete[] h_panel_ipiv;
 
         // b.iii. Copy updated panel back for FP64 factorization
         cudaMemcpy2D(d_P_FP64_NPV_buffer, panel_rows * sizeof(double),
@@ -200,10 +204,9 @@ void MPF(double *h_A, int N, int r, int *IPIV) {
     // Copy result back to host
     cudaMemcpy(h_A, d_A, N * N * sizeof(double), cudaMemcpyDeviceToHost);
     memcpy(IPIV, h_IPIV, N * sizeof(int));
-    for (int i = 0; i < N; ++i) {
-        IPIV[i] = i + 1; // Initialize to identity permutation
-    }
+
     // Cleanup
+    cublasDestroy(handle);
     delete[] h_IPIV;
     cudaFree(d_A);
     cudaFree(d_P_FP16_buffer);
