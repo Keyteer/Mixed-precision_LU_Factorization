@@ -4,7 +4,7 @@
 #include "hgetf2_kernel.h"
 
 int main() {
-    const int rows = 3, cols = 2;
+    const int rows = 245, cols = 32; // Adjusted for larger test
     const int total_elements = rows * cols;
     
     // Allocate host memory
