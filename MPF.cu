@@ -26,18 +26,20 @@ __global__ void fp16_to_double_block(const fp16* input, double* output, int size
     }
 }
 
-// Device version of LASWP (row swaps, FP64) - Column-major order
+// Efficient device version of LASWP (row swaps, FP64) - Column-major order
+// Each thread handles a single (row, col) swap if needed
 __global__ void LASWP_kernel(double *A, int lda, int k, int cols, const int *ipiv_panel) {
-    int j = blockIdx.x * blockDim.x + threadIdx.x;
-    if (j < cols) {
-        int piv = ipiv_panel[j] - 1; // Convert from 1-based to 0-based
-        if (piv != j) {
-            // Swap rows j+k and piv+k for all columns (column-major)
-            for (int col = 0; col < lda; ++col) {
-                double tmp = A[col * lda + (j + k)];
-                A[col * lda + (j + k)] = A[col * lda + (piv + k)];
-                A[col * lda + (piv + k)] = tmp;
-            }
+    int panel_row = blockIdx.y * blockDim.y + threadIdx.y; // 0 <= panel_row < cols
+    int col = blockIdx.x * blockDim.x + threadIdx.x;        // 0 <= col < lda
+    if (panel_row < cols && col < lda) {
+        int piv = ipiv_panel[panel_row] - 1; // 1-based to 0-based
+        if (piv != panel_row) {
+            int row1 = panel_row + k;
+            int row2 = piv + k;
+            // Swap A[col * lda + row1] <-> A[col * lda + row2]
+            double tmp = A[col * lda + row1];
+            A[col * lda + row1] = A[col * lda + row2];
+            A[col * lda + row2] = tmp;
         }
     }
 }
@@ -150,30 +152,11 @@ void MPF(double *A, int N, int r, int *IPIV) {
         }
 
         // b.ii. Apply permutations to FP64 matrix (kernel)
-        // LASWP_kernel << <(current_panel_cols + 255) / 256, 256 >> > (d_A, N, k, current_panel_cols, d_IPIV_panel);
-        // cudaDeviceSynchronize();
+        dim3 laswp_block(32, 32);
+        dim3 laswp_grid((N + 31) / 32, (current_panel_cols + 31) / 32);
+        LASWP_kernel<<<laswp_grid, laswp_block>>>(d_A, N, k, current_panel_cols, d_IPIV_panel);
+        cudaDeviceSynchronize();
 
-
-        // Copy panel from device to host
-        cudaMemcpy2D(h_A, N * sizeof(double),
-                     d_A + k * N + k, N * sizeof(double),
-                     N * sizeof(double), N,
-                     cudaMemcpyDeviceToHost);
-
-        // Copy IPIV panel from device to host for LAPACKE_dlaswp
-        int* h_ipiv_panel = new int[current_panel_cols];
-        cudaMemcpy(h_ipiv_panel, d_IPIV_panel, current_panel_cols * sizeof(int), cudaMemcpyDeviceToHost);
-
-        // Apply row swaps using LAPACKE_dlaswp (1-based ipiv)
-        LAPACKE_dlaswp(LAPACK_COL_MAJOR, panel_rows, h_A, N, 1, current_panel_cols, h_ipiv_panel, 1);
-
-        delete[] h_ipiv_panel;
-
-        // Copy updated panel back to device
-        cudaMemcpy2D(d_A + k * N + k, N * sizeof(double),
-                     h_A, N * sizeof(double),
-                     N * sizeof(double), N,
-                     cudaMemcpyHostToDevice);
 
         // Update global IPIV array
         int *h_panel_ipiv = new int[current_panel_cols];
