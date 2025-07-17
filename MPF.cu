@@ -134,6 +134,9 @@ void MPF(double *A, int N, int r, int *IPIV) {
             HGETF2_kernel << <1, threads >> > (d_P_FP16_buffer, panel_rows, panel_rows, current_panel_cols, d_IPIV_panel);
             cudaError_t err = cudaDeviceSynchronize();
             if (err != cudaSuccess) {
+                std::cout << "CUDA kernel error: " << cudaGetErrorString(err) << std::endl;
+                std::cout << "Using CPU fallback for IPIV calculation" << std::endl;
+                
                 // CPU fallback: simple pivoting logic
                 int *h_fallback_ipiv = new int[current_panel_cols];
                 for (int i = 0; i < current_panel_cols; i++) {
@@ -141,8 +144,36 @@ void MPF(double *A, int N, int r, int *IPIV) {
                 }
                 cudaMemcpy(d_IPIV_panel, h_fallback_ipiv, current_panel_cols * sizeof(int), cudaMemcpyHostToDevice);
                 delete[] h_fallback_ipiv;
+            } else {
+                std::cout << "Kernel completed successfully" << std::endl;
             }
         }
+
+        // b.ii. Apply permutations to FP64 matrix (kernel)
+        // LASWP_kernel << <(current_panel_cols + 255) / 256, 256 >> > (d_A, N, k, current_panel_cols, d_IPIV_panel);
+        // cudaDeviceSynchronize();
+
+
+        // Copy panel from device to host
+        cudaMemcpy2D(h_A, N * sizeof(double),
+                     d_A + k * N + k, N * sizeof(double),
+                     N * sizeof(double), N,
+                     cudaMemcpyDeviceToHost);
+
+        // Copy IPIV panel from device to host for LAPACKE_dlaswp
+        int* h_ipiv_panel = new int[current_panel_cols];
+        cudaMemcpy(h_ipiv_panel, d_IPIV_panel, current_panel_cols * sizeof(int), cudaMemcpyDeviceToHost);
+
+        // Apply row swaps using LAPACKE_dlaswp (1-based ipiv)
+        LAPACKE_dlaswp(LAPACK_COL_MAJOR, panel_rows, h_A, N, 1, current_panel_cols, h_ipiv_panel, 1);
+
+        delete[] h_ipiv_panel;
+
+        // Copy updated panel back to device
+        cudaMemcpy2D(d_A + k * N + k, N * sizeof(double),
+                     h_A, N * sizeof(double),
+                     N * sizeof(double), N,
+                     cudaMemcpyHostToDevice);
 
         // Update global IPIV array
         int *h_panel_ipiv = new int[current_panel_cols];
