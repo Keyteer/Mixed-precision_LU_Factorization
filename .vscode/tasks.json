@@ -9,7 +9,7 @@
                 "benchmark.cpp",
                 "MPF.cu",
                 "hgetf2_kernel.cu",
-                "dgetf2_native_npv.cpp",
+                "dgetf2_native_npv.cu",
                 "-arch=sm_75",
                 "-lcublas",
                 "-lcudart",
