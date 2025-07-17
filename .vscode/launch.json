@@ -2,14 +2,19 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug CUDA Program",
+            "name": "Debug CUDA Program (cuda-gdb)",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/debug_program",
             "args": ["matrix_3x3.txt", "-v"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
-            "environment": [],
+            "environment": [
+                {
+                    "name": "CUDA_DEBUGGER_SOFTWARE_PREEMPTION",
+                    "value": "1"
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -17,10 +22,30 @@
                     "description": "Enable pretty-printing for gdb",
                     "text": "-enable-pretty-printing",
                     "ignoreFailures": true
+                },
+                {
+                    "description": "Set CUDA focus on kernel",
+                    "text": "set cuda memcheck on",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Enable CUDA thread switching",
+                    "text": "set cuda break_on_launch application",
+                    "ignoreFailures": true
                 }
             ],
             "preLaunchTask": "build",
             "miDebuggerPath": "/usr/bin/cuda-gdb"
+        },
+        {
+            "name": "Nsight Debug CUDA Kernel",
+            "type": "cuda-gdb",
+            "request": "launch",
+            "program": "${workspaceFolder}/debug_program",
+            "args": ["matrix_3x3.txt", "-v"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "build"
         }
     ]
 }

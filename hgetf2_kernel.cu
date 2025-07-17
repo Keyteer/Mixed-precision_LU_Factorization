@@ -1,13 +1,27 @@
 #include "hgetf2_kernel.h"
 #include <cmath>
+#include <cstdio>  // For printf in CUDA kernel
 
 // CUDA kernel for HGETF2 (panel LU in FP16)
 __global__ void HGETF2_kernel(fp16 *panel, int ld, int rows, int cols, int *ipiv_panel) {
     int tid = threadIdx.x;
+    
+    // Debug: Print thread information (only thread 0 to avoid spam)
+    if (tid == 0) {
+        printf("CUDA Kernel: HGETF2_kernel started with %d threads, processing %dx%d panel\n", 
+               blockDim.x, rows, cols);
+    }
+    __syncthreads();
 
     // Process each column sequentially (this is the nature of LU factorization)
     for (int j = 0; j < cols; ++j) {
         __shared__ int shared_piv;
+
+        // Debug: Track progress
+        if (tid == 0) {
+            printf("  Processing column %d\n", j);
+        }
+        __syncthreads();
 
         // Step 1: Find pivot element in parallel using reduction
         __shared__ fp16 max_vals[1024];
@@ -20,16 +34,22 @@ __global__ void HGETF2_kernel(fp16 *panel, int ld, int rows, int cols, int *ipiv
         // Each thread checks one element for maximum
         if (tid + j < rows) {
             int row_idx = tid + j;
-            fp16 val = __habs(panel[j * ld + row_idx]);
-            max_vals[tid] = val;
+            float val_f = fabsf(__half2float(panel[j * ld + row_idx]));
+            max_vals[tid] = __float2half(val_f);
             piv_indices[tid] = row_idx;
+            
+            // Debug: Print what each thread is doing (limit output)
+            if (tid < 4) {
+                printf("    Thread %d: checking row %d, val = %f\n", 
+                       tid, row_idx, val_f);
+            }
         }
         __syncthreads();
 
         // Parallel reduction to find maximum
         for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
             if (tid < stride && tid + stride < blockDim.x) {
-                if (max_vals[tid + stride] > max_vals[tid]) {
+                if (__half2float(max_vals[tid + stride]) > __half2float(max_vals[tid])) {
                     max_vals[tid] = max_vals[tid + stride];
                     piv_indices[tid] = piv_indices[tid + stride];
                 }
@@ -56,14 +76,17 @@ __global__ void HGETF2_kernel(fp16 *panel, int ld, int rows, int cols, int *ipiv
         // Step 3: Gaussian elimination - compute multipliers and update (parallel)
         int row_idx = tid + j + 1;
         if (row_idx < rows) {
-            // Compute multiplier
-            fp16 pivot_val = panel[j * ld + j];
-            fp16 multiplier = panel[j * ld + row_idx] / pivot_val;
-            panel[j * ld + row_idx] = multiplier;
+            // Compute multiplier using float arithmetic for stability
+            float pivot_val = __half2float(panel[j * ld + j]);
+            float elem_val = __half2float(panel[j * ld + row_idx]);
+            float multiplier = elem_val / pivot_val;
+            panel[j * ld + row_idx] = __float2half(multiplier);
 
             // Update remaining columns
             for (int k = j + 1; k < cols; ++k) {
-                panel[k * ld + row_idx] -= multiplier * panel[k * ld + j];
+                float current = __half2float(panel[k * ld + row_idx]);
+                float pivot_k = __half2float(panel[k * ld + j]);
+                panel[k * ld + row_idx] = __float2half(current - multiplier * pivot_k);
             }
         }
         __syncthreads();
