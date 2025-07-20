@@ -10,8 +10,14 @@
 #include "dgetf2_native_npv.h"
 #include "cuda_debug.h"
 
+#define __threads_per_block__ 256
+
+int inline grid_size(int total_elements) {
+    return (total_elements + __threads_per_block__ - 1) / __threads_per_block__;
+}
+
 // GPU kernel for FP64 to FP16 conversion
-__global__ void double_to_fp16_block(const double* input, fp16* output, int size) {
+__global__ void double_to_fp16_block(const double *input, fp16 *output, int size) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < size) {
         output[idx] = double_to_fp16(input[idx]);
@@ -19,7 +25,7 @@ __global__ void double_to_fp16_block(const double* input, fp16* output, int size
 }
 
 // GPU kernel for FP16 to FP64 conversion
-__global__ void fp16_to_double_block(const fp16* input, double* output, int size) {
+__global__ void fp16_to_double_block(const fp16 *input, double *output, int size) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < size) {
         output[idx] = fp16_to_double(input[idx]);
@@ -35,13 +41,13 @@ __global__ void fp16_to_double_block(const fp16* input, double* output, int size
 // ipiv_panel [in] array of pivot indices for the panel (1-based global indexing)
 __global__ void LASWP_kernel(double *A, int lda, int k, int cols, const int *ipiv_panel) {
     int col = blockIdx.x * blockDim.x + threadIdx.x; // Column index
-    
+
     if (col < lda) {
         // Apply swaps sequentially for this column
         for (int panel_col = 0; panel_col < cols; ++panel_col) {
             int current_row = k + panel_col;              // Current row being processed
             int pivot_row = ipiv_panel[panel_col] - 1;    // Convert to 0-based global index
-            
+
             if (pivot_row != current_row) {
                 // Swap A[col * lda + current_row] <-> A[col * lda + pivot_row]
                 double tmp = A[col * lda + current_row];
@@ -69,19 +75,19 @@ void DGEMM_cublas(cublasHandle_t handle, double *dA, int lda, double *dB, int ld
 // --- MPF: Mixed‑precision Pre‑pivoting Factorization ---
 // h_A [in] 
 void MPF(double *A, int N, int r, int *IPIV) {
-    
+
     CUDA_CHECK("ENTRY");
-    
+
     // Check CUDA device availability
     int deviceCount;
     cudaError_t cudaStatus = cudaGetDeviceCount(&deviceCount);
-    
+
     if (deviceCount == 0) {
         return;
     }
-    
+
     cudaSetDevice(0);  // Explicitly set device
-    
+
     // Initialize host memory
     double *h_A = new double[N * N];
     std::memcpy(h_A, A, N * N * sizeof(double));
@@ -89,18 +95,18 @@ void MPF(double *A, int N, int r, int *IPIV) {
     // Allocate device memory
     double *d_A;
     cudaMalloc(&d_A, N * N * sizeof(double));
-    
+
     cudaMemcpy(d_A, h_A, N * N * sizeof(double), cudaMemcpyHostToDevice);
 
     fp16 *d_P_FP16_buffer;
     cudaMalloc(&d_P_FP16_buffer, N * r * sizeof(fp16));
-    
+
     double *d_P_FP64_NPV_buffer;
     cudaMalloc(&d_P_FP64_NPV_buffer, N * r * sizeof(double));
 
     int *d_IPIV_panel;
     cudaMalloc(&d_IPIV_panel, r * sizeof(int));
-    
+
     int *d_IPIV;
     cudaMalloc(&d_IPIV, N * sizeof(int));
 
@@ -118,62 +124,41 @@ void MPF(double *A, int N, int r, int *IPIV) {
         int current_panel_cols = std::min(r, N - k); // Number of columns in the current panel (r or N%r)
         int panel_rows = N - k; // Number of rows in the panel
 
-        // a. Copy panel to FP16 buffer on device
+        // Copy panel to FP16 buffer on device
         // First copy to FP64 buffer, then convert to FP16
         cudaMemcpy2D(d_P_FP64_NPV_buffer, panel_rows * sizeof(double),
             d_A + k * N + k, N * sizeof(double),
             current_panel_cols * sizeof(double), panel_rows,
             cudaMemcpyDeviceToDevice);
 
-        // Convert FP64 panel to FP16 (you need a conversion kernel here)
-        // For now, do it on host as a temporary solution
+        // Convert FP64 panel to FP16
         int total_elements = panel_rows * current_panel_cols;
-        dim3 block(256);
-        dim3 grid((total_elements + 255) / 256);
-        double_to_fp16_block<<<grid, block>>>(d_P_FP64_NPV_buffer, d_P_FP16_buffer, total_elements);
+        double_to_fp16_block << <grid_size(total_elements), __threads_per_block__ >> > (d_P_FP64_NPV_buffer, d_P_FP16_buffer, total_elements);
         cudaDeviceSynchronize();
 
-        // Initialize IPIV panel to identity permutation for this panel
-        int ident_ipiv_panel[r];
-        for (int i = 0; i < current_panel_cols; i++) ident_ipiv_panel[i] = i + 1; // 1-based indexing
-        cudaMemcpy(d_IPIV_panel, ident_ipiv_panel, current_panel_cols * sizeof(int), cudaMemcpyHostToDevice);
-
-        // b.i. Panel LU in FP16 (kernel)
-        int threads_per_block = 256;  // Reduced for better occupancy
-        int num_blocks = (panel_rows + threads_per_block - 1) / threads_per_block;
-        // Limit number of blocks to avoid resource exhaustion
-        num_blocks = std::min(num_blocks, 1024);
-        
+        // Panel LU factorization in FP16
         if (panel_rows > 1) {
-            HGETF2_kernel<<<num_blocks, threads_per_block>>>(d_P_FP16_buffer, panel_rows, panel_rows, current_panel_cols, d_IPIV_panel);
+            HGETF2_kernel << <grid_size(panel_rows), __threads_per_block__ >> > (d_P_FP16_buffer, panel_rows, panel_rows, current_panel_cols, d_IPIV_panel);
             cudaError_t err = cudaDeviceSynchronize();
             if (err != cudaSuccess) {
                 std::cout << "CUDA kernel error: " << cudaGetErrorString(err) << std::endl;
                 std::cout << "Using CPU fallback for IPIV calculation" << std::endl;
-                
-                // CPU fallback: simple pivoting logic
-                int *h_fallback_ipiv = new int[current_panel_cols];
-                for (int i = 0; i < current_panel_cols; i++) {
-                    h_fallback_ipiv[i] = i + 1; // Identity for now (no actual pivoting)
-                }
-                cudaMemcpy(d_IPIV_panel, h_fallback_ipiv, current_panel_cols * sizeof(int), cudaMemcpyHostToDevice);
-                delete[] h_fallback_ipiv;
             } else {
-                std::cout << "Kernel completed successfully with " << num_blocks << " blocks" << std::endl;
+                std::cout << "Kernel completed successfully with " << grid_size(total_elements) << " blocks" << std::endl;
             }
         }
 
         // b.ii. Apply permutations to FP64 matrix (kernel)
-        dim3 laswp_block(256);
-        dim3 laswp_grid((N + 255) / 256);
-        LASWP_kernel<<<laswp_grid, laswp_block>>>(d_A, N, k, current_panel_cols, d_IPIV_panel);
+        dim3 laswp_block(__threads_per_block__);
+        dim3 laswp_grid((N + __threads_per_block__ - 1) / __threads_per_block__);
+        LASWP_kernel << <laswp_grid, laswp_block >> > (d_A, N, k, current_panel_cols, d_IPIV_panel);
         cudaDeviceSynchronize();
 
 
         // Update global IPIV array
         int *h_panel_ipiv = new int[current_panel_cols];
         cudaMemcpy(h_panel_ipiv, d_IPIV_panel, current_panel_cols * sizeof(int), cudaMemcpyDeviceToHost);
-        
+
         for (int j = 0; j < current_panel_cols; ++j) {
             // h_panel_ipiv[j] is already a global 1-based index from HGETF2_kernel
             // No need to add k again
@@ -189,14 +174,14 @@ void MPF(double *A, int N, int r, int *IPIV) {
 
 
 
-            
+
         // Panel LU in FP64 (no pivoting, kernel)
         if (panel_rows > 1) {
-            int fp64_threads_per_block = 256;
+            int fp64_threads_per_block = __threads_per_block__;
             int fp64_num_blocks = (panel_rows + fp64_threads_per_block - 1) / fp64_threads_per_block;
             fp64_num_blocks = std::min(fp64_num_blocks, 1024);
-            
-            dgetf2_native_npv<<<fp64_num_blocks, fp64_threads_per_block>>>(panel_rows, current_panel_cols, d_P_FP64_NPV_buffer, panel_rows);
+
+            dgetf2_native_npv << <fp64_num_blocks, fp64_threads_per_block >> > (panel_rows, current_panel_cols, d_P_FP64_NPV_buffer, panel_rows);
             cudaDeviceSynchronize();
         }
 
@@ -240,7 +225,7 @@ void MPF(double *A, int N, int r, int *IPIV) {
 
     // Copy IPIV back to host  
     memcpy(IPIV, h_IPIV, N * sizeof(int));
-    
+
     // Cleanup
     // cublasDestroy(handle);
     delete[] h_A;
