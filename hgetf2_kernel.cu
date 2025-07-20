@@ -1,7 +1,12 @@
 #include "hgetf2_kernel.h"
 #include <cmath>
 
-// CUDA kernel for HGETF2 (panel LU in FP16)
+// Global memory for inter-block communication
+__device__ fp16 g_block_max_vals[1024];  // Max 1024 blocks
+__device__ int g_block_max_indices[1024];
+__device__ int g_blocks_done[1024];      // Completion counter per column
+
+// CUDA kernel for HGETF2 (panel LU in FP16) - Multi-block version
 // panel: [in/out] pointer to the panel matrix in FP16
 // ld: [in] leading dimension of the panel matrix
 // rows: [in] number of rows in the panel
@@ -9,12 +14,14 @@
 // ipiv_panel: [out] pivot indices for the panel
 __global__ void HGETF2_kernel(fp16 *panel, int ld, int rows, int cols, int *ipiv_panel) {
     int tid = threadIdx.x;
+    int bid = blockIdx.x;
+    int global_tid = bid * blockDim.x + tid;
 
     // Process each column sequentially (this is the nature of LU factorization)
     for (int j = 0; j < cols; ++j) {
         __shared__ int shared_piv;
 
-        // Step 1: Find pivot element in parallel using reduction
+        // Step 1: Find pivot element using multi-block reduction
         __shared__ fp16 max_vals[1024];
         __shared__ int piv_indices[1024];
 
@@ -23,15 +30,15 @@ __global__ void HGETF2_kernel(fp16 *panel, int ld, int rows, int cols, int *ipiv
         piv_indices[tid] = j;
 
         // Each thread checks one element for maximum
-        if (tid + j < rows) {
-            int row_idx = tid + j;
+        int row_idx = global_tid + j;
+        if (row_idx < rows) {
             fp16 val = __habs(panel[j * ld + row_idx]);
             max_vals[tid] = val;
             piv_indices[tid] = row_idx;
         }
         __syncthreads();
 
-        // Parallel reduction to find maximum
+        // Block-level reduction to find maximum
         for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
             if (tid < stride && tid + stride < blockDim.x) {
                 if (max_vals[tid + stride] > max_vals[tid]) {
@@ -42,15 +49,55 @@ __global__ void HGETF2_kernel(fp16 *panel, int ld, int rows, int cols, int *ipiv
             __syncthreads();
         }
 
+        // Store block result in global memory
         if (tid == 0) {
-            shared_piv = piv_indices[0] + 1; // Store 1-based index
-            ipiv_panel[j] = shared_piv;
+            g_block_max_vals[bid] = max_vals[0];
+            g_block_max_indices[bid] = piv_indices[0];
+            __threadfence();
+            atomicAdd(&g_blocks_done[j], 1);
         }
+        __syncthreads();
+
+        // Block 0 performs inter-block reduction
+        if (bid == 0 && tid == 0) {
+            // Wait for all blocks to finish
+            while (g_blocks_done[j] < gridDim.x) {
+                __threadfence();
+            }
+
+            // Find global maximum across all blocks
+            fp16 global_max = g_block_max_vals[0];
+            int global_max_idx = g_block_max_indices[0];
+            
+            for (int b = 1; b < gridDim.x; ++b) {
+                if (g_block_max_vals[b] > global_max) {
+                    global_max = g_block_max_vals[b];
+                    global_max_idx = g_block_max_indices[b];
+                }
+            }
+            
+            shared_piv = global_max_idx + 1; // Store 1-based index
+            ipiv_panel[j] = shared_piv;
+            
+            // Reset for next column
+            g_blocks_done[j] = 0;
+        }
+        
+        // Broadcast pivot to all threads
+        if (bid == 0) {
+            __syncthreads(); // Only block 0 needs this sync
+        }
+        // All blocks wait for block 0 to finish pivot calculation
+        __threadfence_system();
+        if (bid == 0 && tid == 0) {
+            // Signal pivot is ready
+        }
+        shared_piv = ipiv_panel[j]; // All blocks read the computed pivot
         __syncthreads();
 
         // Step 2: Perform row swap if needed (parallel across columns)
         if (shared_piv != (j + 1)) { // Compare 1-based indices
-            int col_idx = tid;
+            int col_idx = global_tid;
             if (col_idx < cols) {
                 // Convert 1-based to 0-based for access
                 swap_fp16(panel[col_idx * ld + j], panel[col_idx * ld + (shared_piv - 1)]);
@@ -59,7 +106,7 @@ __global__ void HGETF2_kernel(fp16 *panel, int ld, int rows, int cols, int *ipiv
         __syncthreads();
 
         // Step 3: Gaussian elimination - compute multipliers and update (parallel)
-        int row_idx = tid + j + 1;
+        row_idx = global_tid + j + 1;
         if (row_idx < rows) {
             // Compute multiplier
             fp16 pivot_val = panel[j * ld + j];

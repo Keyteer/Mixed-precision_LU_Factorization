@@ -157,6 +157,8 @@ int main(int argc, char **argv) {
         if (string(argv[i]) == "--no-check") check_correct = false;
     }
 
+    
+
     ifstream fin(argv[1]);
     if (!fin.is_open()) {
         cout << "Failed to open " << argv[1] << endl;
@@ -220,6 +222,7 @@ int main(int argc, char **argv) {
         if (check_correct) {
             if (!check_correctitude(data_original, data_mpf, ipiv_mpf, n, verbose)) {
                 cout << "MPF produced incorrect results." << endl;
+                cout << "Matriz tamanyo: "<< n << endl;
             }
         }
 

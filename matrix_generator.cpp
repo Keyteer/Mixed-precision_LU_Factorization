@@ -4,8 +4,10 @@
 using namespace std;
 
 int main(int argc, char **argv) {
+
     if (argc < 3) {
-        cout << "Usage: " << argv[0] << " filename maxSize [step=2] [function=exp (exp/lin)]" << endl;
+        cout << "Usage: " << argv[0] << " filename maxSize [step=2] [function=exp (exp/lin)] [sparsity=0.0]" << endl;
+        cout << "  sparsity: fraction of zeros in the matrix (0.0 = dense, 0.9 = 90% zeros)" << endl;
         return -1;
     }
 
@@ -27,6 +29,7 @@ int main(int argc, char **argv) {
             return -1;
         }
     }
+
     bool expStepFunction = true;
     if (argc > 4) {
         string function = argv[4];
@@ -34,6 +37,15 @@ int main(int argc, char **argv) {
             expStepFunction = false;
         } else if (function != "exp") {
             cout << "Invalid function: " << function << ". Use 'exp' or 'lin'." << endl;
+            return -1;
+        }
+    }
+
+    double sparsity = 0.0;
+    if (argc > 5) {
+        sparsity = atof(argv[5]);
+        if (sparsity < 0.0 || sparsity >= 1.0) {
+            cout << "Invalid sparsity: " << sparsity << ". Must be in [0.0, 1.0)." << endl;
             return -1;
         }
     }
@@ -47,7 +59,13 @@ int main(int argc, char **argv) {
 
         for (int i = 0; i < size; i++) {
             for (int j = 0; j < size; j++) {
-                fout << static_cast<double>(rand() % 100) / 10.0 << " "; // Random double values
+                double val;
+                if (sparsity > 0.0 && (static_cast<double>(rand()) / (RAND_MAX + 1.0)) < sparsity) {
+                    val = 0.0;
+                } else {
+                    val = static_cast<double>(rand() % 100) / 10.0;
+                }
+                fout << val << " ";
             }
             fout << endl;
         }
@@ -59,12 +77,14 @@ int main(int argc, char **argv) {
             size += step;
         }
         numMatrices++;
+
+        cout << "Generating matrix of size " << size << "\r" << flush;
     }
     // Move the file pointer to the beginning and write the number of matrices
     fout.seekp(0, ios::beg);
     fout << numMatrices;
     fout.close();
 
-    cout << "number of matrices: " << numMatrices << endl;
+    cout << "\nnumber of matrices: " << numMatrices << endl;
     return 0;
 }

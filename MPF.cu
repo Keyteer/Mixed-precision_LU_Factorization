@@ -27,19 +27,27 @@ __global__ void fp16_to_double_block(const fp16* input, double* output, int size
 }
 
 // Efficient device version of LASWP (row swaps, FP64) - Column-major order
-// Each thread handles a single (row, col) swap if needed
+// Apply swaps sequentially for each panel column
+// A [in/out] pointer to the matrix A
+// lda [in] leading dimension of A
+// k [in] starting row index for the panel
+// cols [in] number of columns in the panel
+// ipiv_panel [in] array of pivot indices for the panel (1-based global indexing)
 __global__ void LASWP_kernel(double *A, int lda, int k, int cols, const int *ipiv_panel) {
-    int panel_row = blockIdx.y * blockDim.y + threadIdx.y; // 0 <= panel_row < cols
-    int col = blockIdx.x * blockDim.x + threadIdx.x;        // 0 <= col < lda
-    if (panel_row < cols && col < lda) {
-        int piv = ipiv_panel[panel_row] - 1; // 1-based to 0-based
-        if (piv != panel_row) {
-            int row1 = panel_row + k;
-            int row2 = piv + k;
-            // Swap A[col * lda + row1] <-> A[col * lda + row2]
-            double tmp = A[col * lda + row1];
-            A[col * lda + row1] = A[col * lda + row2];
-            A[col * lda + row2] = tmp;
+    int col = blockIdx.x * blockDim.x + threadIdx.x; // Column index
+    
+    if (col < lda) {
+        // Apply swaps sequentially for this column
+        for (int panel_col = 0; panel_col < cols; ++panel_col) {
+            int current_row = k + panel_col;              // Current row being processed
+            int pivot_row = ipiv_panel[panel_col] - 1;    // Convert to 0-based global index
+            
+            if (pivot_row != current_row) {
+                // Swap A[col * lda + current_row] <-> A[col * lda + pivot_row]
+                double tmp = A[col * lda + current_row];
+                A[col * lda + current_row] = A[col * lda + pivot_row];
+                A[col * lda + pivot_row] = tmp;
+            }
         }
     }
 }
@@ -58,7 +66,7 @@ void DGEMM_cublas(cublasHandle_t handle, double *dA, int lda, double *dB, int ld
     cublasDgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &alpha, dA, lda, dB, ldb, &beta, dC, ldc);
 }
 
-// --- MPF: All on GPU ---
+// --- MPF: Mixed‑precision Pre‑pivoting Factorization ---
 // h_A [in] 
 void MPF(double *A, int N, int r, int *IPIV) {
     
@@ -131,9 +139,13 @@ void MPF(double *A, int N, int r, int *IPIV) {
         cudaMemcpy(d_IPIV_panel, ident_ipiv_panel, current_panel_cols * sizeof(int), cudaMemcpyHostToDevice);
 
         // b.i. Panel LU in FP16 (kernel)
-        int threads = std::min(1024, panel_rows - 1);
-        if (threads > 0) {
-            HGETF2_kernel << <1, threads >> > (d_P_FP16_buffer, panel_rows, panel_rows, current_panel_cols, d_IPIV_panel);
+        int threads_per_block = 256;  // Reduced for better occupancy
+        int num_blocks = (panel_rows + threads_per_block - 1) / threads_per_block;
+        // Limit number of blocks to avoid resource exhaustion
+        num_blocks = std::min(num_blocks, 1024);
+        
+        if (panel_rows > 1) {
+            HGETF2_kernel<<<num_blocks, threads_per_block>>>(d_P_FP16_buffer, panel_rows, panel_rows, current_panel_cols, d_IPIV_panel);
             cudaError_t err = cudaDeviceSynchronize();
             if (err != cudaSuccess) {
                 std::cout << "CUDA kernel error: " << cudaGetErrorString(err) << std::endl;
@@ -147,13 +159,13 @@ void MPF(double *A, int N, int r, int *IPIV) {
                 cudaMemcpy(d_IPIV_panel, h_fallback_ipiv, current_panel_cols * sizeof(int), cudaMemcpyHostToDevice);
                 delete[] h_fallback_ipiv;
             } else {
-                std::cout << "Kernel completed successfully" << std::endl;
+                std::cout << "Kernel completed successfully with " << num_blocks << " blocks" << std::endl;
             }
         }
 
         // b.ii. Apply permutations to FP64 matrix (kernel)
-        dim3 laswp_block(32, 32);
-        dim3 laswp_grid((N + 31) / 32, (current_panel_cols + 31) / 32);
+        dim3 laswp_block(256);
+        dim3 laswp_grid((N + 255) / 256);
         LASWP_kernel<<<laswp_grid, laswp_block>>>(d_A, N, k, current_panel_cols, d_IPIV_panel);
         cudaDeviceSynchronize();
 
@@ -163,9 +175,9 @@ void MPF(double *A, int N, int r, int *IPIV) {
         cudaMemcpy(h_panel_ipiv, d_IPIV_panel, current_panel_cols * sizeof(int), cudaMemcpyDeviceToHost);
         
         for (int j = 0; j < current_panel_cols; ++j) {
-            // h_panel_ipiv[j] is 1-based relative to panel start
-            // Convert to global 1-based index: panel_start + panel_relative_index
-            h_IPIV[k + j] = h_panel_ipiv[j] + k;
+            // h_panel_ipiv[j] is already a global 1-based index from HGETF2_kernel
+            // No need to add k again
+            h_IPIV[k + j] = h_panel_ipiv[j];
         }
         delete[] h_panel_ipiv;
 
@@ -179,8 +191,12 @@ void MPF(double *A, int N, int r, int *IPIV) {
 
             
         // Panel LU in FP64 (no pivoting, kernel)
-        if (threads > 0) {
-            dgetf2_native_npv<<<1, threads>>>(panel_rows, current_panel_cols, d_P_FP64_NPV_buffer, panel_rows);
+        if (panel_rows > 1) {
+            int fp64_threads_per_block = 256;
+            int fp64_num_blocks = (panel_rows + fp64_threads_per_block - 1) / fp64_threads_per_block;
+            fp64_num_blocks = std::min(fp64_num_blocks, 1024);
+            
+            dgetf2_native_npv<<<fp64_num_blocks, fp64_threads_per_block>>>(panel_rows, current_panel_cols, d_P_FP64_NPV_buffer, panel_rows);
             cudaDeviceSynchronize();
         }
 
@@ -222,8 +238,9 @@ void MPF(double *A, int N, int r, int *IPIV) {
     cudaMemcpy(h_A, d_A, N * N * sizeof(double), cudaMemcpyDeviceToHost);
     memcpy(A, h_A, N * N * sizeof(double));
 
-    // Copy IPIV back to host
+    // Copy IPIV back to host  
     memcpy(IPIV, h_IPIV, N * sizeof(int));
+    
     // Cleanup
     // cublasDestroy(handle);
     delete[] h_A;
