@@ -12,6 +12,7 @@
 
 #define __threads_per_block__ 256
 
+// Quick calculation of blocks needed based on the number of threads needed
 int inline grid_size(int threads_needed) {
     return (threads_needed + __threads_per_block__ - 1) / __threads_per_block__;
 }
@@ -96,7 +97,6 @@ void MPF(double *A, int N, int r, int *IPIV) {
     // Allocate device memory
     double *d_A;
     cudaMalloc(&d_A, N * N * sizeof(double));
-
     cudaMemcpy(d_A, A, N * N * sizeof(double), cudaMemcpyHostToDevice);
 
     fp16 *d_P_FP16_buffer;
@@ -173,7 +173,7 @@ void MPF(double *A, int N, int r, int *IPIV) {
                 current_panel_cols * sizeof(double), panel_rows,
                 cudaMemcpyDeviceToDevice);
 
-            // 4.2 Panel LU in FP64 (no pivoting, kernel)
+            // 4.2 Panel LU factorization in FP64 withot pivoting (kernel)
             dgetf2_native_npv << <grid_size(panel_rows), __threads_per_block__ >> > (panel_rows, current_panel_cols, d_P_FP64_NPV_buffer, panel_rows);
             cudaDeviceSynchronize();
 
