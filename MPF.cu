@@ -12,8 +12,8 @@
 
 #define __threads_per_block__ 256
 
-int inline grid_size(int total_elements) {
-    return (total_elements + __threads_per_block__ - 1) / __threads_per_block__;
+int inline grid_size(int threads_needed) {
+    return (threads_needed + __threads_per_block__ - 1) / __threads_per_block__;
 }
 
 // GPU kernel for FP64 to FP16 conversion
@@ -141,7 +141,7 @@ void MPF(double *A, int N, int r, int *IPIV) {
             if (err != cudaSuccess) {
                 std::cout << "CUDA kernel error: " << cudaGetErrorString(err) << std::endl;
             } else {
-                std::cout << "Kernel completed successfully with " << grid_size(total_elements) << " blocks" << std::endl;
+                std::cout << "Kernel completed successfully with " << grid_size(panel_rows) << " blocks" << std::endl;
             }
 
 
