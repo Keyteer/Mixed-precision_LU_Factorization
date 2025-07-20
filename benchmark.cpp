@@ -85,7 +85,7 @@ void row_permute(double *A, const int *ipiv, int n) {
     // Apply the pivot swaps
     for (int i = n - 1; i >= 0; --i) {
         int piv = ipiv[i] - 1; // Convert to 0-based
-        if (piv != i) {
+        if (piv != i && piv >= 0 && piv < n) { // Add bounds check
             // Swap rows i and piv
             for (int j = 0; j < n; ++j) {
                 swap(A[j * n + i], A[j * n + piv]); // Column-major: A[col * lda + row]
@@ -113,14 +113,12 @@ bool check_correctitude(double *A, double *Data, int ipiv[], int n, bool verbose
 
     print_LU(Data, n, verbose);
 
-    if (verbose && n < 10) {
-        cout << "ipiv:";
+    cout << "ipiv:";
         for (int i = 0; i < n; i++) {
             cout << " " << ipiv[i];
         }
-        cout << "\n" << endl;
-    }
-
+    cout << "\n" << endl;
+    
     // get L*U
     double *LU = new double[n * n];
     multiply_sqrMatrices(L, U, LU, n);
@@ -134,7 +132,9 @@ bool check_correctitude(double *A, double *Data, int ipiv[], int n, bool verbose
     print_sqrMatrix("PLU matrix:", PLU, n, verbose);
 
     bool correctitude = check_sqrMatrix_equality(A, PLU, n);
-
+    if (verbose) {
+        cout << "Correctitude: " << (correctitude ? "True" : "False") << endl;
+    }
     delete[] L;
     delete[] U;
     delete[] LU;
@@ -220,12 +220,12 @@ int main(int argc, char **argv) {
         }
 
         if (check_correct) {
+            cout<< "Checking correctness of MPF results..." << endl;
             if (!check_correctitude(data_original, data_mpf, ipiv_mpf, n, verbose)) {
                 cout << "MPF produced incorrect results." << endl;
-                cout << "Matriz tamanyo: "<< n << endl;
             }
         }
-
+        cout << "Matriz tamanyo: "<< n << endl;        
         // Benchmark LAPACKE_dgetrf
         int *ipiv = new int[n];
         start = chrono::high_resolution_clock::now();
@@ -233,7 +233,7 @@ int main(int argc, char **argv) {
         end = chrono::high_resolution_clock::now();
         double lapack_time = chrono::duration<double>(end - start).count();
 
-
+        cout << endl;
         if (info != 0) {
             cout << "LAPACKE_dgetrf failed with error code " << info << endl;
         }
@@ -251,6 +251,7 @@ int main(int argc, char **argv) {
         delete[] data_original;
         delete[] data_mpf;
         delete[] data_dgetrf;
+        delete[] ipiv_mpf;
         delete[] ipiv;
 
         csv << n << "," << mpf_time << "," << lapack_time << endl;
