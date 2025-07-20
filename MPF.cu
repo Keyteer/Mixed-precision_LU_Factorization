@@ -12,6 +12,7 @@
 
 #define __threads_per_block__ 256
 
+// Quick calculation of blocks needed based on the number of threads needed
 int inline grid_size(int threads_needed) {
     return (threads_needed + __threads_per_block__ - 1) / __threads_per_block__;
 }
@@ -96,7 +97,6 @@ void MPF(double *A, int N, int r, int *IPIV) {
     // Allocate device memory
     double *d_A;
     cudaMalloc(&d_A, N * N * sizeof(double));
-
     cudaMemcpy(d_A, A, N * N * sizeof(double), cudaMemcpyHostToDevice);
 
     fp16 *d_P_FP16_buffer;
@@ -158,9 +158,16 @@ void MPF(double *A, int N, int r, int *IPIV) {
             LASWP_kernel << <grid_size(N), __threads_per_block__ >> > (d_A, N, k, current_panel_cols, d_IPIV_panel);
             cudaDeviceSynchronize();
 
-            // 3.2 Update matrix IPIV array
-            cudaMemcpy(d_IPIV + k, d_IPIV_panel, current_panel_cols * sizeof(int), cudaMemcpyDeviceToDevice);
+            // 3.2 Update global IPIV array
+            int *h_panel_ipiv = new int[current_panel_cols];
+            cudaMemcpy(h_panel_ipiv, d_IPIV_panel, current_panel_cols * sizeof(int), cudaMemcpyDeviceToHost);
 
+            for (int j = 0; j < current_panel_cols; ++j) {
+                // h_panel_ipiv[j] is already a global 1-based index from HGETF2_kernel
+                // No need to add k again
+                IPIV[k + j] = h_panel_ipiv[j] + k;
+            }
+            delete[] h_panel_ipiv;
 
 
             // 4.1 Copy updated panel back for FP64 factorization
@@ -169,7 +176,7 @@ void MPF(double *A, int N, int r, int *IPIV) {
                 current_panel_cols * sizeof(double), panel_rows,
                 cudaMemcpyDeviceToDevice);
 
-            // 4.2 Panel LU in FP64 (no pivoting, kernel)
+            // 4.2 Panel LU factorization in FP64 withot pivoting (kernel)
             dgetf2_native_npv << <grid_size(panel_rows), __threads_per_block__ >> > (panel_rows, current_panel_cols, d_P_FP64_NPV_buffer, panel_rows);
             cudaDeviceSynchronize();
 
@@ -215,11 +222,10 @@ void MPF(double *A, int N, int r, int *IPIV) {
     // Copy matrix back to host
     cudaMemcpy(A, d_A, N * N * sizeof(double), cudaMemcpyDeviceToHost);
 
-    // Copy IPIV back to host  
-    cudaMemcpy(IPIV, d_IPIV, N * sizeof(int), cudaMemcpyDeviceToHost);
+    // Note: IPIV is already updated on host side during panel processing
 
     // Cleanup
-    // cublasDestroy(handle);
+    cublasDestroy(handle);
     cudaFree(d_A);
     cudaFree(d_P_FP16_buffer);
     cudaFree(d_P_FP64_NPV_buffer);
