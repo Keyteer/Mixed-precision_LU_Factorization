@@ -135,14 +135,22 @@ void MPF(double *A, int N, int r, int *IPIV) {
 
 
 
-            // 2 Panel LU factorization in FP16
-            HGETF2_kernel << <grid_size(panel_rows), __threads_per_block__ >> > (d_P_FP16_buffer, panel_rows, panel_rows, current_panel_cols, d_IPIV_panel);
-            cudaError_t err = cudaDeviceSynchronize();
+            // 2 Panel LU factorization in FP16 using Cooperative Groups
+            int num_blocks = grid_size(panel_rows);
+            int threads_per_block = __threads_per_block__;
+            
+            void* args[] = {&d_P_FP16_buffer, &panel_rows, &panel_rows, &current_panel_cols, &d_IPIV_panel};
+            
+            cudaError_t err = cudaLaunchCooperativeKernel((void*)HGETF2_kernel, 
+                                                        dim3(num_blocks), dim3(threads_per_block), 
+                                                        args, 0, 0);
             if (err != cudaSuccess) {
                 std::cout << "CUDA kernel error: " << cudaGetErrorString(err) << std::endl;
             } else {
-                std::cout << "Kernel completed successfully with " << grid_size(panel_rows) << " blocks" << std::endl;
+                std::cout << "Kernel completed successfully with " << num_blocks << " blocks" << std::endl;
             }
+            
+            cudaDeviceSynchronize();
 
 
 
