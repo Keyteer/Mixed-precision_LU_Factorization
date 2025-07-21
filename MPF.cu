@@ -80,20 +80,6 @@ __global__ void LASWP_kernel(double *A, int lda, int k, int cols, const int *ipi
     }
 }
 
-// --- DTRSM: Triangular solve en FP64 usando cuBLAS ---
-void DTRSM_cublas(cublasHandle_t handle, double *dA, int lda, double *dB, int ldb, int m, int n) {
-    const double alpha = 1.0;
-    cublasDtrsm(handle, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_N, CUBLAS_DIAG_NON_UNIT,
-        m, n, &alpha, dA, lda, dB, ldb);
-}
-
-// --- DGEMM: Multiplicación de matrices en FP64 usando cuBLAS ---
-void DGEMM_cublas(cublasHandle_t handle, double *dA, int lda, double *dB, int ldb, double *dC, int ldc, int m, int n, int k) {
-    const double alpha = -1.0;
-    const double beta = 1.0;
-    cublasDgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &alpha, dA, lda, dB, ldb, &beta, dC, ldc);
-}
-
 // --- MPF: Mixed‑precision Pre‑pivoting Factorization ---
 // A [in/out] pointer to the matrix A
 // N [in] size of the matrix A (N x N)
@@ -113,7 +99,6 @@ void MPF(double *A, int N, int r, int *IPIV) {
     }
 
     cudaSetDevice(0);  // Explicitly set device
-
 
     // Allocate device memory
     double *d_A;
@@ -214,20 +199,26 @@ void MPF(double *A, int N, int r, int *IPIV) {
 
 
 
-            // 3.1 Apply permutations to FP64 matrix (kernel)
-            LASWP_kernel << <grid_size(N), __threads_per_block__ >> > (d_A, N, k, panel_cols, d_IPIV_panel);
-            cudaDeviceSynchronize();
-
-            // 3.2 Update global IPIV array
+            // 3.2 Update global IPIV array and prepare indices for LASWP
             int *h_panel_ipiv = new int[panel_cols];
             cudaMemcpy(h_panel_ipiv, d_IPIV_panel, panel_cols * sizeof(int), cudaMemcpyDeviceToHost);
 
+            // Convert local panel indices to global indices
             for (int j = 0; j < panel_cols; ++j) {
-                // h_panel_ipiv[j] is already a global 1-based index from HGETF2_kernel
-                // No need to add k again
+                // h_panel_ipiv[j] is 1-based local index within panel
+                // Convert to global 1-based index for final IPIV output
                 IPIV[k + j] = h_panel_ipiv[j] + k;
+                // Also convert for LASWP kernel which expects global indices
+                h_panel_ipiv[j] = h_panel_ipiv[j] + k;  
             }
+            
+            // Update the device array with global indices for LASWP
+            cudaMemcpy(d_IPIV_panel, h_panel_ipiv, panel_cols * sizeof(int), cudaMemcpyHostToDevice);
             delete[] h_panel_ipiv;
+
+            // 3.1 Apply permutations to FP64 matrix (kernel)
+            LASWP_kernel << <grid_size(N), __threads_per_block__ >> > (d_A, N, k, panel_cols, d_IPIV_panel);
+            cudaDeviceSynchronize();
 
 
             // 4.1 Copy updated panel back for FP64 factorization
@@ -270,33 +261,26 @@ void MPF(double *A, int N, int r, int *IPIV) {
 
             // 5 Trailing submatrix update (cuBLAS)
             if (k + panel_cols < N) {
-                int n = panel_rows - panel_cols;
-                // 5.1 Solve triangular system (DTRSM) U = L^{T} x A_trailing
-                const double alpha = 1.0, beta = 0.0;
-                cublasDgemm(
+                int n = N - k - panel_cols;  // Number of columns in trailing matrix
+                int m = N - k - panel_cols;  // Number of rows in trailing matrix
+                
+                // 5.1 Solve triangular system L21 * U12 = A12 (where A12 is the top-right block)
+                // We need to solve L^-1 * A12 = U12, which is equivalent to L * U12 = A12
+                // Since L is unit lower triangular, we use triangular solve
+                double alpha = 1.0;
+                cublasDtrsm(
                     handle,
-                    CUBLAS_OP_T, CUBLAS_OP_N,                         // transpose L, no transpose A_trailing
-                    panel_cols, n, n,                                 // dimensions
-                    &alpha,                                           // 1.0
-                    d_A + k * N + k + panel_cols, N,                  // L (n x panel_cols)
-                    d_A + (k + panel_cols) * N + k, N,                // A_trailing (n x n)
-                    &beta,                                            // 0.0
-                    d_A + (k + panel_cols) * N + k + panel_cols, N    // U (panel_cols x n)
+                    CUBLAS_SIDE_LEFT,           // L is on the left
+                    CUBLAS_FILL_MODE_LOWER,     // L is lower triangular
+                    CUBLAS_OP_N,                // No transpose of L
+                    CUBLAS_DIAG_UNIT,           // Unit diagonal
+                    panel_cols, n,              // dimensions: m=panel_cols, n=trailing_cols
+                    &alpha,                     // alpha = 1.0
+                    d_A + k * N + k, N,         // L11 (panel_cols x panel_cols)
+                    d_A + (k + panel_cols) * N + k, N  // A12 -> U12 (panel_cols x n)
                 );
                 
-                
-                
-                /*DTRSM_cublas(
-                    handle,
-                    d_A + k * N + k + panel_cols,
-                    N,
-                    d_A + (k + panel_cols) * N + k + panel_cols,
-                    N,
-                    m,
-                    panel_cols
-                );*/
-                
-                // Debug: Print d_A after panel iteration but before DGEMM
+                // Debug: Print d_A after triangular solve but before DGEMM
                 /*cudaDeviceSynchronize();
                 std::vector<double> h_A(N * N);
                 cudaMemcpy(h_A.data(), d_A, N * N * sizeof(double), cudaMemcpyDeviceToHost);
@@ -307,18 +291,19 @@ void MPF(double *A, int N, int r, int *IPIV) {
                     }
                     std::cout << std::endl;
                 }            */
-                // 5.2 Update trailing submatrix (DGEMM)  A_trailing = A_trailing - L x U
-                DGEMM_cublas(
+
+                // 5.2 Update trailing submatrix A22 = A22 - L21 * U12
+                alpha = -1.0; 
+                double beta = 1.0;
+                cublasDgemm(
                     handle,
-                    d_A + k * N + k + panel_cols,                                   // L (dim: m x panel_cols)
-                    N,                                                              // L ld
-                    d_A + (k + panel_cols) * N + k,                                 // U (dim: panel cols x n)
-                    N,                                                              // U ld
-                    d_A + (k + panel_cols) * N + k + panel_cols,                    // A_trailing (dim: m x n)
-                    N,                                                              // A_trailing ld
-                    n,
-                    n,
-                    panel_cols
+                    CUBLAS_OP_N, CUBLAS_OP_N,                                      // no transpose L21, no transpose U12
+                    m, n, panel_cols,                                              // dimensions: m, n, k
+                    &alpha,                                                        // -1.0
+                    d_A + k * N + k + panel_cols, N,                               // L21 (m x panel_cols)
+                    d_A + (k + panel_cols) * N + k, N,                             // U12 (panel_cols x n)
+                    &beta,                                                         // 1.0
+                    d_A + (k + panel_cols) * N + k + panel_cols, N                 // A22 (m x n)
                 );
                 // Debug: Print d_A after trailing update
                 
