@@ -8,7 +8,6 @@
 #include "fp16_utils.h"
 #include "hgetf2_kernel.h"
 #include "dgetf2_native_npv.h"
-#include "cuda_debug.h"
 
 #define __threads_per_block__ 256
 
@@ -65,8 +64,6 @@ __global__ void LASWP_kernel(double *A, int lda, int k, int cols, const int *ipi
 // r [in] panel size for mixed-precision factorization
 // IPIV [out] array to store pivot indices (1-based global indexing)
 void MPF(double *A, int N, int r, int *IPIV) {
-
-    CUDA_CHECK("ENTRY");
     
     // Check CUDA device availability
     int deviceCount;
