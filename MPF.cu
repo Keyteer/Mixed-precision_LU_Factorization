@@ -57,7 +57,7 @@ __global__ void LASWP_kernel(double *A, int lda, int k, int cols, const int *ipi
         // Apply swaps sequentially for this column
         for (int panel_col = 0; panel_col < cols; ++panel_col) {
             int current_row = k + panel_col;              // Current row being processed
-            int pivot_row = ipiv_panel[panel_col] - 1;    // Convert to 0-based global index
+            int pivot_row = ipiv_panel[panel_col] - 1 + k;    // Convert to 0-based global index
 
             if (pivot_row != current_row) {
                 // Swap A[col * lda + current_row] <-> A[col * lda + pivot_row]
@@ -273,7 +273,7 @@ void MPF(double *A, int N, int r, int *IPIV) {
                 int n = panel_rows - panel_cols;
                 // 5.1 Solve triangular system (DTRSM) U = L^{T} x A_trailing
                 const double alpha = 1.0, beta = 0.0;
-                cublasDgemm(
+                std::cout << "Funciona cublas? : " << cublasDgemm(
                     handle,
                     CUBLAS_OP_T, CUBLAS_OP_N,                         // transpose L, no transpose A_trailing
                     panel_cols, n, n,                                 // dimensions
@@ -282,7 +282,7 @@ void MPF(double *A, int N, int r, int *IPIV) {
                     d_A + (k + panel_cols) * N + k, N,                // A_trailing (n x n)
                     &beta,                                            // 0.0
                     d_A + (k + panel_cols) * N + k + panel_cols, N    // U (panel_cols x n)
-                );
+                ) << std::endl;
                 
                 
                 
