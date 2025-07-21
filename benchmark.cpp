@@ -113,11 +113,11 @@ bool check_correctitude(double *A, double *Data, int ipiv[], int n, bool verbose
 
     print_LU(Data, n, verbose);
 
-    cout << "ipiv:";
+    /*cout << "ipiv:";
         for (int i = 0; i < n; i++) {
             cout << " " << ipiv[i];
         }
-    cout << "\n" << endl;
+    cout << "\n" << endl;*/
     
     // get L*U
     double *LU = new double[n * n];

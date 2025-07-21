@@ -232,8 +232,18 @@ void MPF(double *A, int N, int r, int *IPIV) {
                 );
             }
 
-            // 4.2 Panel LU factorization in FP64 withot pivoting (kernel)
-            dgetf2_native_npv << <grid_size(panel_rows), __threads_per_block__ >> > (panel_rows, panel_cols, d_P_FP64_NPV_buffer, panel_rows);
+            // 4.2 Panel LU factorization in FP64 without pivoting (kernel)
+            int num_blocks_dgetf2 = grid_size(panel_rows);
+            int threads_per_block_dgetf2 = __threads_per_block__;
+            
+            void* args_dgetf2[] = {&panel_rows, &panel_cols, &d_P_FP64_NPV_buffer, &panel_rows};
+            
+            cudaError_t err_dgetf2 = cudaLaunchCooperativeKernel((void*)dgetf2_native_npv, 
+                                                              dim3(num_blocks_dgetf2), dim3(threads_per_block_dgetf2), 
+                                                              args_dgetf2, 0, 0);
+            if (err_dgetf2 != cudaSuccess) {
+                std::cout << "CUDA dgetf2 kernel error: " << cudaGetErrorString(err_dgetf2) << std::endl;
+            }
             cudaDeviceSynchronize();
 
             // 4.3 Copy back the panel to matrix A
@@ -307,7 +317,7 @@ void MPF(double *A, int N, int r, int *IPIV) {
                 );
                 // Debug: Print d_A after trailing update
                 
-                cudaDeviceSynchronize();
+                /*cudaDeviceSynchronize();
                 std::vector<double> h1_A(N * N);
                 cudaMemcpy(h1_A.data(), d_A, N * N * sizeof(double), cudaMemcpyDeviceToHost);
                 std::cout << "d_A after trailing update (k = " << k << "):" << std::endl;
@@ -316,7 +326,7 @@ void MPF(double *A, int N, int r, int *IPIV) {
                         std::cout << h1_A[row + col * N] << " ";
                     }
                     std::cout << std::endl;
-                }    
+                }    */
             }
         }
         /*
