@@ -270,10 +270,23 @@ void MPF(double *A, int N, int r, int *IPIV) {
 
             // 5 Trailing submatrix update (cuBLAS)
             if (k + panel_cols < N) {
-                int m = panel_rows - panel_cols;
-                int n = N - k - panel_cols;
+                int n = panel_rows - panel_cols;
                 // 5.1 Solve triangular system (DTRSM) U = L^{T} x A_trailing
-                DTRSM_cublas(
+                const double alpha = 1.0, beta = 0.0;
+                cublasDgemm(
+                    handle,
+                    CUBLAS_OP_T, CUBLAS_OP_N,                         // transpose L, no transpose A_trailing
+                    panel_cols, n, n,                                 // dimensions
+                    &alpha,                                           // 1.0
+                    d_A + k * N + k + panel_cols, N,                  // L (n x panel_cols)
+                    d_A + (k + panel_cols) * N + k, N,                // A_trailing (n x n)
+                    &beta,                                            // 0.0
+                    d_A + (k + panel_cols) * N + k + panel_cols, N    // U (panel_cols x n)
+                );
+                
+                
+                
+                /*DTRSM_cublas(
                     handle,
                     d_A + k * N + k + panel_cols,
                     N,
@@ -281,7 +294,7 @@ void MPF(double *A, int N, int r, int *IPIV) {
                     N,
                     m,
                     panel_cols
-                );
+                );*/
                 
                 // Debug: Print d_A after panel iteration but before DGEMM
                 /*cudaDeviceSynchronize();
@@ -297,13 +310,13 @@ void MPF(double *A, int N, int r, int *IPIV) {
                 // 5.2 Update trailing submatrix (DGEMM)  A_trailing = A_trailing - L x U
                 DGEMM_cublas(
                     handle,
-                    d_A + k * N + k + panel_cols,
-                    N,
-                    d_A + (k + panel_cols) * N + k,
-                    N,
-                    d_A + (k + panel_cols) * N + k + panel_cols,
-                    N,
-                    m,
+                    d_A + k * N + k + panel_cols,                                   // L (dim: m x panel_cols)
+                    N,                                                              // L ld
+                    d_A + (k + panel_cols) * N + k,                                 // U (dim: panel cols x n)
+                    N,                                                              // U ld
+                    d_A + (k + panel_cols) * N + k + panel_cols,                    // A_trailing (dim: m x n)
+                    N,                                                              // A_trailing ld
+                    n,
                     n,
                     panel_cols
                 );
