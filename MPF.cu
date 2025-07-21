@@ -81,7 +81,7 @@ void DGEMM_cublas(cublasHandle_t handle, double *dA, int lda, double *dB, int ld
 void MPF(double *A, int N, int r, int *IPIV) {
 
     CUDA_CHECK("ENTRY");
-
+    
     // Check CUDA device availability
     int deviceCount;
     cudaError_t cudaStatus = cudaGetDeviceCount(&deviceCount);
@@ -114,7 +114,17 @@ void MPF(double *A, int N, int r, int *IPIV) {
     cublasHandle_t handle;
     cublasStatus_t cublasStatus = cublasCreate(&handle);
 
-
+    // Debug: Print d_A before panel iteration
+    /*cudaDeviceSynchronize();
+    std::vector<double> h_A(N * N);
+    cudaMemcpy(h_A.data(), d_A, N * N * sizeof(double), cudaMemcpyDeviceToHost);
+    std::cout << "d_A before panel iteration:" << std::endl;
+    for (int row = 0; row < N; ++row) {
+        for (int col = 0; col < N; ++col) {
+            std::cout << h_A[row + col * N] << " ";
+        }
+        std::cout << std::endl;
+    }*/
     // Panel iteration
     for (int k = 0; k < N; k += r) {
         int current_panel_cols = std::min(r, N - k); // Number of columns in the current panel (r or N%r)
@@ -123,11 +133,25 @@ void MPF(double *A, int N, int r, int *IPIV) {
         if (panel_rows > 1) {
 
             // 1.1 Extract panel from matrix A to FP64 buffer
-            cudaMemcpy2D(d_P_FP64_NPV_buffer, panel_rows * sizeof(double),
-                d_A + k * N + k, N * sizeof(double),
-                current_panel_cols * sizeof(double), panel_rows,
-                cudaMemcpyDeviceToDevice);
-
+            // Copy panel column by column using cudaMemcpy
+            for (int col = 0; col < current_panel_cols; ++col) {
+                cudaMemcpy(
+                    d_P_FP64_NPV_buffer + col * panel_rows,
+                    d_A + (k + col) * N + k,
+                    panel_rows * sizeof(double),
+                    cudaMemcpyDeviceToDevice
+                );
+            }
+                cudaDeviceSynchronize();
+                std::vector<double> h_P_FP64_NPV_buffer(panel_rows * current_panel_cols);
+                cudaMemcpy(h_P_FP64_NPV_buffer.data(), d_P_FP64_NPV_buffer, panel_rows * current_panel_cols * sizeof(double), cudaMemcpyDeviceToHost);
+                std::cout << "d_P_FP64_NPV_buffer:" << std::endl;
+                for (int row = 0; row < panel_rows; ++row) {
+                    for (int col = 0; col < current_panel_cols; ++col) {
+                        std::cout << h_P_FP64_NPV_buffer[row + col * panel_rows] << " ";
+                    }
+                    std::cout << std::endl;
+                }
             // 1.2 Convert and copy FP64 panel to FP16 panel
             int total_elements = panel_rows * current_panel_cols;
             double_to_fp16_block << <grid_size(total_elements), __threads_per_block__ >> > (d_P_FP64_NPV_buffer, d_P_FP16_buffer, total_elements);
@@ -141,6 +165,18 @@ void MPF(double *A, int N, int r, int *IPIV) {
             
             void* args[] = {&d_P_FP16_buffer, &panel_rows, &panel_rows, &current_panel_cols, &d_IPIV_panel};
             
+            /* Debug: print h_P_FP16_buffer
+            cudaDeviceSynchronize();
+            std::vector<fp16> h_P_FP16_buffer(panel_rows * current_panel_cols);
+            cudaMemcpy(h_P_FP16_buffer.data(), d_P_FP16_buffer, panel_rows * current_panel_cols * sizeof(fp16), cudaMemcpyDeviceToHost);
+            std::cout << "d_P_FP16_buffer:" << std::endl;
+            for (int row = 0; row < panel_rows; ++row) {
+                for (int col = 0; col < current_panel_cols; ++col) {
+                    std::cout << static_cast<float>(fp16_to_double(h_P_FP16_buffer[row + col * panel_rows])) << " ";
+                }
+                std::cout << std::endl;
+            }
+            */
             cudaError_t err = cudaLaunchCooperativeKernel((void*)HGETF2_kernel, 
                                                         dim3(num_blocks), dim3(threads_per_block), 
                                                         args, 0, 0);
@@ -171,10 +207,15 @@ void MPF(double *A, int N, int r, int *IPIV) {
 
 
             // 4.1 Copy updated panel back for FP64 factorization
-            cudaMemcpy2D(d_P_FP64_NPV_buffer, panel_rows * sizeof(double),
-                d_A + k * N + k, N * sizeof(double),
-                current_panel_cols * sizeof(double), panel_rows,
-                cudaMemcpyDeviceToDevice);
+            // Copy updated panel from d_A back to d_P_FP64_NPV_buffer column by column
+            for (int col = 0; col < current_panel_cols; ++col) {
+                cudaMemcpy(
+                    d_P_FP64_NPV_buffer + col * panel_rows,
+                    d_A + (k + col) * N + k,
+                    panel_rows * sizeof(double),
+                    cudaMemcpyDeviceToDevice
+                );
+            }
 
             // 4.2 Panel LU factorization in FP64 withot pivoting (kernel)
             dgetf2_native_npv << <grid_size(panel_rows), __threads_per_block__ >> > (panel_rows, current_panel_cols, d_P_FP64_NPV_buffer, panel_rows);
@@ -216,6 +257,17 @@ void MPF(double *A, int N, int r, int *IPIV) {
                     current_panel_cols
                 );
             }
+        }
+        // Debug: Print d_A after panel iteration
+        cudaDeviceSynchronize();
+        std::vector<double> h_A(N * N);
+        cudaMemcpy(h_A.data(), d_A, N * N * sizeof(double), cudaMemcpyDeviceToHost);
+        std::cout << "d_A after panel iteration (k = " << k << "):" << std::endl;
+        for (int row = 0; row < N; ++row) {
+            for (int col = 0; col < N; ++col) {
+                std::cout << h_A[row + col * N] << " ";
+            }
+            std::cout << std::endl;
         }
     }
 

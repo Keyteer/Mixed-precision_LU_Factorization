@@ -85,7 +85,7 @@ void row_permute(double *A, const int *ipiv, int n) {
     // Apply the pivot swaps
     for (int i = n - 1; i >= 0; --i) {
         int piv = ipiv[i] - 1; // Convert to 0-based
-        if (piv != i && piv >= 0 && piv < n) { // Add bounds check
+        if (piv != i) {
             // Swap rows i and piv
             for (int j = 0; j < n; ++j) {
                 swap(A[j * n + i], A[j * n + piv]); // Column-major: A[col * lda + row]
@@ -251,7 +251,6 @@ int main(int argc, char **argv) {
         delete[] data_original;
         delete[] data_mpf;
         delete[] data_dgetrf;
-        delete[] ipiv_mpf;
         delete[] ipiv;
 
         csv << n << "," << mpf_time << "," << lapack_time << endl;
