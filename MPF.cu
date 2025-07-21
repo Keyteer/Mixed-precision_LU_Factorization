@@ -148,14 +148,14 @@ void MPF(double *A, int N, int r, int *IPIV) {
     }*/
     // Panel iteration
     for (int k = 0; k < N; k += r) {
-        int current_panel_cols = std::min(r, N - k); // Number of columns in the current panel (r or N%r)
+        int panel_cols = std::min(r, N - k); // Number of columns in the current panel (r or N%r)
         int panel_rows = N - k; // Number of rows in the panel
 
         if (panel_rows > 1) {
 
             // 1.1 Extract panel from matrix A to FP64 buffer
             // Copy panel column by column using cudaMemcpy
-            for (int col = 0; col < current_panel_cols; ++col) {
+            for (int col = 0; col < panel_cols; ++col) {
                 cudaMemcpy(
                     d_P_FP64_NPV_buffer + col * panel_rows,
                     d_A + (k + col) * N + k,
@@ -164,19 +164,19 @@ void MPF(double *A, int N, int r, int *IPIV) {
                 );
             }
             cudaDeviceSynchronize();
-            std::vector<double> h_P_FP64_NPV_buffer(panel_rows * current_panel_cols);
-            cudaMemcpy(h_P_FP64_NPV_buffer.data(), d_P_FP64_NPV_buffer, panel_rows * current_panel_cols * sizeof(double), cudaMemcpyDeviceToHost);
+            std::vector<double> h_P_FP64_NPV_buffer(panel_rows * panel_cols);
+            cudaMemcpy(h_P_FP64_NPV_buffer.data(), d_P_FP64_NPV_buffer, panel_rows * panel_cols * sizeof(double), cudaMemcpyDeviceToHost);
             // Debug: d_P_FP64_NPV_buffer
             
             /*std::cout << "d_P_FP64_NPV_buffer:" << std::endl;
             for (int row = 0; row < panel_rows; ++row) {
-                for (int col = 0; col < current_panel_cols; ++col) {
+                for (int col = 0; col < panel_cols; ++col) {
                     std::cout << h_P_FP64_NPV_buffer[row + col * panel_rows] << " ";
                 }
                 std::cout << std::endl;
             }*/
             // 1.2 Convert and copy FP64 panel to FP16 panel
-            int total_elements = panel_rows * current_panel_cols;
+            int total_elements = panel_rows * panel_cols;
             double_to_fp16_block << <grid_size(total_elements), __threads_per_block__ >> > (d_P_FP64_NPV_buffer, d_P_FP16_buffer, total_elements);
             cudaDeviceSynchronize();
 
@@ -186,16 +186,16 @@ void MPF(double *A, int N, int r, int *IPIV) {
             int num_blocks = grid_size(panel_rows);
             int threads_per_block = __threads_per_block__;
             
-            void* args[] = {&d_P_FP16_buffer, &panel_rows, &panel_rows, &current_panel_cols, &d_IPIV_panel};
+            void* args[] = {&d_P_FP16_buffer, &panel_rows, &panel_rows, &panel_cols, &d_IPIV_panel};
             
             //Debug: print h_P_FP16_buffer
             /*
             cudaDeviceSynchronize();
-            std::vector<fp16> h_P_FP16_buffer(panel_rows * current_panel_cols);
-            cudaMemcpy(h_P_FP16_buffer.data(), d_P_FP16_buffer, panel_rows * current_panel_cols * sizeof(fp16), cudaMemcpyDeviceToHost);
+            std::vector<fp16> h_P_FP16_buffer(panel_rows * panel_cols);
+            cudaMemcpy(h_P_FP16_buffer.data(), d_P_FP16_buffer, panel_rows * panel_cols * sizeof(fp16), cudaMemcpyDeviceToHost);
             std::cout << "d_P_FP16_buffer:" << std::endl;
             for (int row = 0; row < panel_rows; ++row) {
-                for (int col = 0; col < current_panel_cols; ++col) {
+                for (int col = 0; col < panel_cols; ++col) {
                     std::cout << static_cast<float>(fp16_to_double(h_P_FP16_buffer[row + col * panel_rows])) << " ";
                 }
                 std::cout << std::endl;
@@ -215,14 +215,14 @@ void MPF(double *A, int N, int r, int *IPIV) {
 
 
             // 3.1 Apply permutations to FP64 matrix (kernel)
-            LASWP_kernel << <grid_size(N), __threads_per_block__ >> > (d_A, N, k, current_panel_cols, d_IPIV_panel);
+            LASWP_kernel << <grid_size(N), __threads_per_block__ >> > (d_A, N, k, panel_cols, d_IPIV_panel);
             cudaDeviceSynchronize();
 
             // 3.2 Update global IPIV array
-            int *h_panel_ipiv = new int[current_panel_cols];
-            cudaMemcpy(h_panel_ipiv, d_IPIV_panel, current_panel_cols * sizeof(int), cudaMemcpyDeviceToHost);
+            int *h_panel_ipiv = new int[panel_cols];
+            cudaMemcpy(h_panel_ipiv, d_IPIV_panel, panel_cols * sizeof(int), cudaMemcpyDeviceToHost);
 
-            for (int j = 0; j < current_panel_cols; ++j) {
+            for (int j = 0; j < panel_cols; ++j) {
                 // h_panel_ipiv[j] is already a global 1-based index from HGETF2_kernel
                 // No need to add k again
                 IPIV[k + j] = h_panel_ipiv[j] + k;
@@ -232,7 +232,7 @@ void MPF(double *A, int N, int r, int *IPIV) {
 
             // 4.1 Copy updated panel back for FP64 factorization
             // Copy updated panel from d_A back to d_P_FP64_NPV_buffer column by column
-            for (int col = 0; col < current_panel_cols; ++col) {
+            for (int col = 0; col < panel_cols; ++col) {
                 cudaMemcpy(
                     d_P_FP64_NPV_buffer + col * panel_rows,
                     d_A + (k + col) * N + k,
@@ -242,12 +242,12 @@ void MPF(double *A, int N, int r, int *IPIV) {
             }
 
             // 4.2 Panel LU factorization in FP64 withot pivoting (kernel)
-            dgetf2_native_npv << <grid_size(panel_rows), __threads_per_block__ >> > (panel_rows, current_panel_cols, d_P_FP64_NPV_buffer, panel_rows);
+            dgetf2_native_npv << <grid_size(panel_rows), __threads_per_block__ >> > (panel_rows, panel_cols, d_P_FP64_NPV_buffer, panel_rows);
             cudaDeviceSynchronize();
 
             // 4.3 Copy back the panel to matrix A
             // Copy back the panel to matrix A column by column
-            for (int col = 0; col < current_panel_cols; ++col) {
+            for (int col = 0; col < panel_cols; ++col) {
                 cudaMemcpy(
                     d_A + (k + col) * N + k,
                     d_P_FP64_NPV_buffer + col * panel_rows,
@@ -269,18 +269,18 @@ void MPF(double *A, int N, int r, int *IPIV) {
             }*/
 
             // 5 Trailing submatrix update (cuBLAS)
-            if (k + current_panel_cols < N) {
-                int m = panel_rows - current_panel_cols;
-                int n = N - k - current_panel_cols;
-                // 5.1 Solve triangular system (DTRSM)
+            if (k + panel_cols < N) {
+                int m = panel_rows - panel_cols;
+                int n = N - k - panel_cols;
+                // 5.1 Solve triangular system (DTRSM) U = L^{T} x A_trailing
                 DTRSM_cublas(
                     handle,
-                    d_A + k * N + k + current_panel_cols,
+                    d_A + k * N + k + panel_cols,
                     N,
-                    d_A + (k + current_panel_cols) * N + k + current_panel_cols,
+                    d_A + (k + panel_cols) * N + k + panel_cols,
                     N,
                     m,
-                    current_panel_cols
+                    panel_cols
                 );
                 
                 // Debug: Print d_A after panel iteration but before DGEMM
@@ -294,18 +294,18 @@ void MPF(double *A, int N, int r, int *IPIV) {
                     }
                     std::cout << std::endl;
                 }            */
-                // 5.2 Update trailing submatrix (DGEMM)
+                // 5.2 Update trailing submatrix (DGEMM)  A_trailing = A_trailing - L x U
                 DGEMM_cublas(
                     handle,
-                    d_A + k * N + k + current_panel_cols,
+                    d_A + k * N + k + panel_cols,
                     N,
-                    d_A + (k + current_panel_cols) * N + k,
+                    d_A + (k + panel_cols) * N + k,
                     N,
-                    d_A + (k + current_panel_cols) * N + k + current_panel_cols,
+                    d_A + (k + panel_cols) * N + k + panel_cols,
                     N,
                     m,
                     n,
-                    current_panel_cols
+                    panel_cols
                 );
                 // Debug: Print d_A after trailing update
                 
