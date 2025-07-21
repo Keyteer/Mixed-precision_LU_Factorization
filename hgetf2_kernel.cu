@@ -1,7 +1,7 @@
 #include "hgetf2_kernel.h"
 #include <cmath>
 #include <cooperative_groups.h>
-#include <cstdio>  // For printf debugging
+
 // Global memory for inter-block communication
 __device__ fp16 g_block_max_vals[1024];  // Max 1024 blocks
 __device__ int g_block_max_indices[1024];
@@ -50,7 +50,6 @@ __global__ void HGETF2_kernel(fp16 *panel, int ld, int rows, int cols, int *ipiv
                 if (max_vals[tid + stride] > max_vals[tid]) {
                     max_vals[tid] = max_vals[tid + stride];
                     piv_indices[tid] = piv_indices[tid + stride];
-                //    printf("Block %d: New max found: %f at index %d\n", bid, __half2float(max_vals[tid]), piv_indices[tid]);
                 }
             }
             __syncthreads();

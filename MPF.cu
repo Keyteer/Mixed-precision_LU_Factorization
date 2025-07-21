@@ -42,17 +42,7 @@ __global__ void fp16_to_double_block(const fp16 *input, double *output, int size
 // ipiv_panel [in] array of pivot indices for the panel (1-based global indexing)
 __global__ void LASWP_kernel(double *A, int lda, int k, int cols, const int *ipiv_panel) {
     int col = blockIdx.x * blockDim.x + threadIdx.x; // Column index
-    // Print matrix A (for debugging)
-    if (col == 0 && blockIdx.y == 0 && threadIdx.y == 0) {
-        // Debug: Matrix A Before Swap
-        /*printf("Matrix A Before Swap:\n");
-        for (int i = 0; i < lda; ++i) {
-            for (int j = 0; j < lda; ++j) {
-                printf("%f ", A[j * lda + i]);
-            }
-            printf("\n");
-        }*/
-    }
+    
     if (col < lda) {
         // Apply swaps sequentially for this column
         for (int panel_col = 0; panel_col < cols; ++panel_col) {
@@ -66,17 +56,6 @@ __global__ void LASWP_kernel(double *A, int lda, int k, int cols, const int *ipi
                 A[col * lda + pivot_row] = tmp;
             }
         }
-    }
-
-    if (col == 0 && blockIdx.y == 0 && threadIdx.y == 0) {
-        // Debug: Matrix A After Swap
-        /*printf("Matrix A After Swap:\n");
-        for (int i = 0; i < lda; ++i) {
-            for (int j = 0; j < lda; ++j) {
-                printf("%f ", A[j * lda + i]);
-            }
-            printf("\n");
-        }*/
     }
 }
 
@@ -120,17 +99,6 @@ void MPF(double *A, int N, int r, int *IPIV) {
     cublasHandle_t handle;
     cublasStatus_t cublasStatus = cublasCreate(&handle);
 
-    // Debug: Print d_A before panel iteration
-    /*cudaDeviceSynchronize();
-    std::vector<double> h_A(N * N);
-    cudaMemcpy(h_A.data(), d_A, N * N * sizeof(double), cudaMemcpyDeviceToHost);
-    std::cout << "d_A before panel iteration:" << std::endl;
-    for (int row = 0; row < N; ++row) {
-        for (int col = 0; col < N; ++col) {
-            std::cout << h_A[row + col * N] << " ";
-        }
-        std::cout << std::endl;
-    }*/
     // Panel iteration
     for (int k = 0; k < N; k += r) {
         int panel_cols = std::min(r, N - k); // Number of columns in the current panel (r or N%r)
@@ -149,17 +117,7 @@ void MPF(double *A, int N, int r, int *IPIV) {
                 );
             }
             cudaDeviceSynchronize();
-            std::vector<double> h_P_FP64_NPV_buffer(panel_rows * panel_cols);
-            cudaMemcpy(h_P_FP64_NPV_buffer.data(), d_P_FP64_NPV_buffer, panel_rows * panel_cols * sizeof(double), cudaMemcpyDeviceToHost);
-            // Debug: d_P_FP64_NPV_buffer
             
-            /*std::cout << "d_P_FP64_NPV_buffer:" << std::endl;
-            for (int row = 0; row < panel_rows; ++row) {
-                for (int col = 0; col < panel_cols; ++col) {
-                    std::cout << h_P_FP64_NPV_buffer[row + col * panel_rows] << " ";
-                }
-                std::cout << std::endl;
-            }*/
             // 1.2 Convert and copy FP64 panel to FP16 panel
             int total_elements = panel_rows * panel_cols;
             double_to_fp16_block << <grid_size(total_elements), __threads_per_block__ >> > (d_P_FP64_NPV_buffer, d_P_FP16_buffer, total_elements);
@@ -172,19 +130,6 @@ void MPF(double *A, int N, int r, int *IPIV) {
             int threads_per_block = __threads_per_block__;
             
             void* args[] = {&d_P_FP16_buffer, &panel_rows, &panel_rows, &panel_cols, &d_IPIV_panel};
-            
-            //Debug: print h_P_FP16_buffer
-            /*
-            cudaDeviceSynchronize();
-            std::vector<fp16> h_P_FP16_buffer(panel_rows * panel_cols);
-            cudaMemcpy(h_P_FP16_buffer.data(), d_P_FP16_buffer, panel_rows * panel_cols * sizeof(fp16), cudaMemcpyDeviceToHost);
-            std::cout << "d_P_FP16_buffer:" << std::endl;
-            for (int row = 0; row < panel_rows; ++row) {
-                for (int col = 0; col < panel_cols; ++col) {
-                    std::cout << static_cast<float>(fp16_to_double(h_P_FP16_buffer[row + col * panel_rows])) << " ";
-                }
-                std::cout << std::endl;
-            }*/
             
             cudaError_t err = cudaLaunchCooperativeKernel((void*)HGETF2_kernel, 
                                                         dim3(num_blocks), dim3(threads_per_block), 
@@ -256,24 +201,16 @@ void MPF(double *A, int N, int r, int *IPIV) {
                     cudaMemcpyDeviceToDevice
                 );
             }
-            // Debug: Print d_A before trailing
-            /*
-            cudaDeviceSynchronize();
-            std::vector<double> h_A(N * N);
-            cudaMemcpy(h_A.data(), d_A, N * N * sizeof(double), cudaMemcpyDeviceToHost);
-            std::cout << "d_A trailing update 1 (k = " << k << "):" << std::endl;
-            for (int row = 0; row < N; ++row) {
-                for (int col = 0; col < N; ++col) {
-                    std::cout << h_A[row + col * N] << " ";
-                }
-                std::cout << std::endl;
-            }*/
-
+            
             // 5 Trailing submatrix update (cuBLAS)
             if (k + panel_cols < N) {
                 int n = N - k - panel_cols;  // Number of columns in trailing matrix
                 int m = N - k - panel_cols;  // Number of rows in trailing matrix
-                
+                //
+                //      |   L11\U11   |   U12   | }-panel_cols              
+                //      |     L21     |   A22   | }-n
+                //      I--panel_cols-I--- n ---I
+                //
                 // 5.1 Solve triangular system L21 * U12 = A12 (where A12 is the top-right block)
                 // We need to solve L^-1 * A12 = U12, which is equivalent to L * U12 = A12
                 // Since L is unit lower triangular, we use triangular solve
@@ -290,18 +227,6 @@ void MPF(double *A, int N, int r, int *IPIV) {
                     d_A + (k + panel_cols) * N + k, N  // A12 -> U12 (panel_cols x n)
                 );
                 
-                // Debug: Print d_A after triangular solve but before DGEMM
-                /*cudaDeviceSynchronize();
-                std::vector<double> h_A(N * N);
-                cudaMemcpy(h_A.data(), d_A, N * N * sizeof(double), cudaMemcpyDeviceToHost);
-                std::cout << "d_A in middle of trailing update (k = " << k << "):" << std::endl;
-                for (int row = 0; row < N; ++row) {
-                    for (int col = 0; col < N; ++col) {
-                        std::cout << h_A[row + col * N] << " ";
-                    }
-                    std::cout << std::endl;
-                }            */
-
                 // 5.2 Update trailing submatrix A22 = A22 - L21 * U12
                 alpha = -1.0; 
                 double beta = 1.0;
@@ -315,32 +240,8 @@ void MPF(double *A, int N, int r, int *IPIV) {
                     &beta,                                                         // 1.0
                     d_A + (k + panel_cols) * N + k + panel_cols, N                 // A22 (m x n)
                 );
-                // Debug: Print d_A after trailing update
-                
-                /*cudaDeviceSynchronize();
-                std::vector<double> h1_A(N * N);
-                cudaMemcpy(h1_A.data(), d_A, N * N * sizeof(double), cudaMemcpyDeviceToHost);
-                std::cout << "d_A after trailing update (k = " << k << "):" << std::endl;
-                for (int row = 0; row < N; ++row) {
-                    for (int col = 0; col < N; ++col) {
-                        std::cout << h1_A[row + col * N] << " ";
-                    }
-                    std::cout << std::endl;
-                }    */
             }
         }
-        /*
-        // Debug: Print d_A after panel iteration
-        cudaDeviceSynchronize();
-        std::vector<double> h_A(N * N);
-        cudaMemcpy(h_A.data(), d_A, N * N * sizeof(double), cudaMemcpyDeviceToHost);
-        std::cout << "d_A after panel iteration (k = " << k << "):" << std::endl;
-        for (int row = 0; row < N; ++row) {
-            for (int col = 0; col < N; ++col) {
-                std::cout << h_A[row + col * N] << " ";
-            }
-            std::cout << std::endl;
-        }*/
     }
 
     // Copy matrix back to host
