@@ -208,8 +208,14 @@ int main(int argc, char **argv) {
         print_sqrMatrix("Original matrix:", data_mpf, n);
 
 
-        // Benchmark MPF (your LU factorization)
+                // Benchmark MPF (your LU factorization)
         int* ipiv_mpf = new int[n];
+        
+        // Initialize IPIV array to prevent garbage values
+        for (int i = 0; i < n; i++) {
+            ipiv_mpf[i] = i + 1;  // Initialize to identity permutation
+        }
+        
         auto start = chrono::high_resolution_clock::now();
         MPF(data_mpf, n, 32, ipiv_mpf);
         auto end = chrono::high_resolution_clock::now();
@@ -225,6 +231,8 @@ int main(int argc, char **argv) {
                 cout << "MPF produced incorrect results." << endl;
             }
         }
+
+
         cout << "Matriz tamanyo: "<< n << endl;        
         // Benchmark LAPACKE_dgetrf
         int *ipiv = new int[n];
@@ -247,14 +255,15 @@ int main(int argc, char **argv) {
                 cout << "LAPACKE_dgetrf produced incorrect results." << endl;
             }
         }
-
+        delete[] ipiv_mpf;
         delete[] data_original;
         delete[] data_mpf;
         delete[] data_dgetrf;
         delete[] ipiv;
+          
 
         csv << n << "," << mpf_time << "," << lapack_time << endl;
-    }
+       }
     csv.close();
 
     return 0;
